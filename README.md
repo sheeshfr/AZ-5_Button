@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="logo.png" alt="AZ-5 Button Logo" width="128" />
+  <img src="screenshot.png" alt="AZ-5 Button" width="380" />
   <h1>AZ-5 Button</h1>
 </div>
 
@@ -9,10 +9,6 @@
 
   <p>A tactile, retro-styled emergency SCRAM button quick launcher for your favorite game, script, or desktop application. Slam the button to launch!</p>
   <p>Vibe Coded by <a href="https://github.com/sheeshfr"><b>SheeshFr</b></a></p>
-
-  <br />
-
-  <img src="screenshot.png" alt="AZ-5 Button" width="400" />
 </div>
 
 ---
