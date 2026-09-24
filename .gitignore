@@ -1,19 +1,51 @@
-# User configuration / local paths
+# User configuration & local state
 settings.txt
+*.local
+*.env
 
-# Build output
+# Build & compiler outputs
 *.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.lib
+bin/
+obj/
+
+# Package & archive formats
 *.zip
+*.tar
+*.tar.gz
+*.tgz
 *.7z
 *.rar
+*.iso
 
-# OS metadata
-Thumbs.db
-ehthumbs.db
-[Dd]esktop.ini
-.DS_Store
+# Logs, crash dumps, & temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+*.dmp
 
-# IDE / Editor folders
+# IDE & Editor folders/files
 .vs/
 .idea/
 .vscode/
+*.suo
+*.user
+*.userprefs
+*.sln.docstates
+*.DotSettings.user
+
+# Operating System metadata
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+.DS_Store
+.AppleDouble
+.LSOverride
