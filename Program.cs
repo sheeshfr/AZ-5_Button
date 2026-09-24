@@ -101,7 +101,7 @@ namespace AZ5Launcher
         // Top help drawer animation state
         private bool isHelpExpanded = false;
         private float helpProgress = 0.0f; // 0.0f = hidden, 1.0f = fully visible
-        private float currentHelpAngle = 0.0f; // 0.0f = right-side up, 180.0f = upside down
+        private float currentRadiationAngle = 0.0f; // 0.0f = upright, 360.0f = full 360 spin
         private Stopwatch helpStopwatch = new Stopwatch();
         private float animHelpStart = 0.0f;
         private float animHelpTarget = 0.0f;
@@ -112,7 +112,7 @@ namespace AZ5Launcher
         // Left target presets drawer animation state
         private bool isLeftExpanded = false;
         private float leftProgress = 0.0f; // 0.0f = hidden, 1.0f = fully visible
-        private float currentRadAngle = 0.0f; // degrees trefoil rotation
+        private float currentLeftArrowAngle = 0.0f; // 0.0f = facing left, 180.0f = facing right
         private Stopwatch leftStopwatch = new Stopwatch();
         private float animLeftStart = 0.0f;
         private float animLeftTarget = 0.0f;
@@ -484,8 +484,8 @@ namespace AZ5Launcher
 
             // 9. Draw all 4 corner action buttons on the casing
             DrawCloseButton(g);
-            DrawHelpButton(g);
             DrawRadiationButton(g);
+            DrawLeftArrowButton(g);
             DrawArrowButton(g);
         }
 
@@ -538,51 +538,13 @@ namespace AZ5Launcher
             }
         }
 
-        private void DrawHelpButton(Graphics g)
+        private void DrawRadiationButton(Graphics g)
         {
             int yOffset = isPressed ? 2 : 0;
             int xOffset = isPressed ? 2 : 0;
             Rectangle rect = new Rectangle(helpButtonRect.X + xOffset, helpButtonRect.Y + yOffset, helpButtonRect.Width, helpButtonRect.Height);
 
-            Color bgColor = (isHoveringHelp || isHelpExpanded) ? Color.FromArgb(50, 120, 210) : Color.FromArgb(160, 180, 180, 180);
-            using (Brush brush = new SolidBrush(bgColor))
-            {
-                g.FillEllipse(brush, rect);
-            }
-
-            using (GraphicsPath path = new GraphicsPath())
-            using (FontFamily fontFamily = new FontFamily("Segoe UI"))
-            {
-                path.AddString("?", fontFamily, (int)FontStyle.Bold, 13.5f, PointF.Empty, StringFormat.GenericTypographic);
-                RectangleF bounds = path.GetBounds();
-
-                float cx = rect.X + rect.Width / 2f;
-                float cy = rect.Y + rect.Height / 2f;
-                float glyphCx = bounds.X + bounds.Width / 2f;
-                float glyphCy = bounds.Y + bounds.Height / 2f;
-
-                using (Matrix matrix = new Matrix())
-                {
-                    matrix.Translate(-glyphCx, -glyphCy, MatrixOrder.Append);
-                    matrix.Rotate(currentHelpAngle, MatrixOrder.Append);
-                    matrix.Translate(cx, cy, MatrixOrder.Append);
-                    path.Transform(matrix);
-                }
-
-                using (Brush textBrush = new SolidBrush(Color.White))
-                {
-                    g.FillPath(textBrush, path);
-                }
-            }
-        }
-
-        private void DrawRadiationButton(Graphics g)
-        {
-            int yOffset = isPressed ? 2 : 0;
-            int xOffset = isPressed ? 2 : 0;
-            Rectangle rect = new Rectangle(radiationButtonRect.X + xOffset, radiationButtonRect.Y + yOffset, radiationButtonRect.Width, radiationButtonRect.Height);
-
-            Color bgColor = (isHoveringRadiation || isLeftExpanded) ? Color.FromArgb(235, 175, 15) : Color.FromArgb(160, 180, 180, 180);
+            Color bgColor = (isHoveringHelp || isHelpExpanded) ? Color.FromArgb(235, 175, 15) : Color.FromArgb(160, 180, 180, 180);
             using (Brush brush = new SolidBrush(bgColor))
             {
                 g.FillEllipse(brush, rect);
@@ -591,11 +553,12 @@ namespace AZ5Launcher
             float cx = rect.X + rect.Width / 2f;
             float cy = rect.Y + rect.Height / 2f;
 
-            Color symbolColor = (isHoveringRadiation || isLeftExpanded) ? Color.FromArgb(30, 30, 30) : Color.White;
+            Color symbolColor = (isHoveringHelp || isHelpExpanded) ? Color.FromArgb(30, 30, 30) : Color.White;
 
             GraphicsState state = g.Save();
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TranslateTransform(cx, cy);
-            g.RotateTransform(currentRadAngle);
+            g.RotateTransform(currentRadiationAngle);
 
             using (Brush symBrush = new SolidBrush(symbolColor))
             {
@@ -615,6 +578,43 @@ namespace AZ5Launcher
                 float rDot = 1.5f;
                 float dDot = rDot * 2f;
                 g.FillEllipse(symBrush, -rDot, -rDot, dDot, dDot);
+            }
+
+            g.Restore(state);
+        }
+
+        private void DrawLeftArrowButton(Graphics g)
+        {
+            int yOffset = isPressed ? 2 : 0;
+            int xOffset = isPressed ? 2 : 0;
+            Rectangle rect = new Rectangle(radiationButtonRect.X + xOffset, radiationButtonRect.Y + yOffset, radiationButtonRect.Width, radiationButtonRect.Height);
+
+            Color bgColor = (isHoveringRadiation || isLeftExpanded) ? Color.FromArgb(70, 80, 95) : Color.FromArgb(160, 180, 180, 180);
+            using (Brush brush = new SolidBrush(bgColor))
+            {
+                g.FillEllipse(brush, rect);
+            }
+
+            float cx = rect.X + rect.Width / 2f;
+            float cy = rect.Y + rect.Height / 2f;
+
+            GraphicsState state = g.Save();
+            g.SmoothingMode = SmoothingMode.HighQuality;
+            g.TranslateTransform(cx, cy);
+            g.RotateTransform(currentLeftArrowAngle);
+
+            using (Pen pen = new Pen(Color.White, 2.0f))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                pen.LineJoin = LineJoin.Round;
+
+                PointF[] pts = new PointF[] {
+                    new PointF(2.0f, -4.5f),
+                    new PointF(-2.5f, 0f),
+                    new PointF(2.0f, 4.5f)
+                };
+                g.DrawLines(pen, pts);
             }
 
             g.Restore(state);
@@ -906,7 +906,7 @@ namespace AZ5Launcher
                     helpProgress = animHelpStart + (animHelpTarget - animHelpStart) * ease;
                     isAnimating = true;
                 }
-                currentHelpAngle = helpProgress * 180.0f;
+                currentRadiationAngle = helpProgress * 360.0f;
             }
 
             if (leftStopwatch.IsRunning)
@@ -924,7 +924,7 @@ namespace AZ5Launcher
                     leftProgress = animLeftStart + (animLeftTarget - animLeftStart) * ease;
                     isAnimating = true;
                 }
-                currentRadAngle = leftProgress * 120.0f;
+                currentLeftArrowAngle = leftProgress * 180.0f;
             }
 
             if (!isAnimating && !cardStopwatch.IsRunning && !helpStopwatch.IsRunning && !leftStopwatch.IsRunning)

@@ -17,9 +17,10 @@
 
 1. **Slam the Red Button** to launch your target.
 2. **Right-Click** to configure your target.
-3. **Radioactive Button**: Switch between 4 target presets.
-4. **Arrow Button**: View the target path.
-5. **Auto-Close?**: Automatically exit after launching.
+3. **Left Arrow**: Switch between 4 target presets.
+4. **Down Arrow**: View the target path.
+5. **Radiation Button**: View quick instructions.
+6. **Auto-Close?**: Automatically exit after launching.
 
 ---
 
