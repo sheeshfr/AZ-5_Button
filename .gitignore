@@ -3,6 +3,7 @@ settings.txt
 
 # Build output
 *.exe
+*.zip
 *.7z
 *.rar
 
