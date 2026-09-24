@@ -1,9 +1,8 @@
 # User configuration / local paths
 settings.txt
 
-# Build output & Release archives
+# Build output
 *.exe
-*.zip
 *.7z
 *.rar
 
