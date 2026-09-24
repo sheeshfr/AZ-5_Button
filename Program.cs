@@ -15,16 +15,32 @@ namespace AZ5Launcher
 
         public string GetDisplayName()
         {
-            if (!string.IsNullOrEmpty(Label))
-                return Label.ToUpper();
-
             if (string.IsNullOrEmpty(Path))
-                return "ASSIGN TARGET";
-
-            if (Directory.Exists(Path))
             {
-                string dirName = System.IO.Path.GetFileName(Path);
-                return string.IsNullOrEmpty(dirName) ? Path.ToUpper() : dirName.ToUpper();
+                if (!string.IsNullOrEmpty(Label))
+                    return Label.ToUpper();
+                return "ASSIGN TARGET";
+            }
+
+            bool isFolder = false;
+            try
+            {
+                isFolder = Directory.Exists(Path);
+            }
+            catch { }
+
+            if (!string.IsNullOrEmpty(Label))
+            {
+                string lbl = Label.ToUpper();
+                return isFolder ? ("/" + lbl.TrimStart('/')) : lbl;
+            }
+
+            if (isFolder)
+            {
+                string trimmed = Path.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                string dirName = System.IO.Path.GetFileName(trimmed);
+                string folderName = string.IsNullOrEmpty(dirName) ? Path.ToUpper() : dirName.ToUpper();
+                return "/" + folderName.TrimStart('/');
             }
 
             try
@@ -66,6 +82,11 @@ namespace AZ5Launcher
         private Point dragStartCursor = Point.Empty;
         private Point mouseDownCursor = Point.Empty;
         private readonly int dragThreshold = 4; // pixels
+
+        // Window position persistence
+        private bool hasSavedLocation = false;
+        private Point savedLocation = Point.Empty;
+        private Point currentWindowLocation = Point.Empty;
 
         // Corner button geometries (on casing: X = CASING_X..CASING_X+320, Y = 60..370)
         private readonly Rectangle helpButtonRect = new Rectangle(CASING_X + 13, CASING_Y + 12, 22, 22);       // Top Left (153, 72)
@@ -122,6 +143,13 @@ namespace AZ5Launcher
         private readonly int leftDrawerY = 70;
         private readonly int leftDrawerHeight = 290;
         private int hoveringSlotIndex = -1; // 0..3 or -1
+
+        // Drag-and-drop state variables
+        private bool isDragOverActive = false;
+        private string dragDropPath = "";
+        private string dragDropPreviewName = "";
+        private int dragTargetSlotIndex = -1; // 0..3
+        private bool isDragTargetMainButton = false;
 
         // Win32 constants to block Alt+Enter and window resizing/maximizing
         private const int WM_SYSKEYDOWN = 0x0104;
@@ -206,6 +234,7 @@ namespace AZ5Launcher
             this.BackColor = Color.Magenta;
             this.TransparencyKey = Color.Magenta;
             this.DoubleBuffered = true;
+            this.AllowDrop = true;
             this.SetStyle(ControlStyles.ResizeRedraw, false);
             this.Text = "AZ-5 Button";
 
@@ -482,6 +511,12 @@ namespace AZ5Launcher
             // 8. Target name sitting directly at the bottom of the casing image
             DrawNameplate(g);
 
+            // 8b. Drag-and-drop HUD overlay over SCRAM button
+            if (isDragOverActive && isDragTargetMainButton)
+            {
+                DrawMainButtonDropOverlay(g);
+            }
+
             // 9. Draw all 4 corner action buttons on the casing
             DrawCloseButton(g);
             DrawRadiationButton(g);
@@ -496,9 +531,22 @@ namespace AZ5Launcher
             Rectangle rect = new Rectangle(nameplateRect.X + xOffset, nameplateRect.Y + yOffset, nameplateRect.Width, nameplateRect.Height);
 
             // Background of nameplate (vintage eggshell instrument badge)
-            Color plateBg = isHoveringNameplate ? Color.FromArgb(246, 248, 244) : Color.FromArgb(236, 238, 232);
+            Color plateBg;
+            if (isDragOverActive)
+            {
+                plateBg = Color.FromArgb(255, 252, 230);
+            }
+            else if (isHoveringNameplate)
+            {
+                plateBg = Color.FromArgb(246, 248, 244);
+            }
+            else
+            {
+                plateBg = Color.FromArgb(236, 238, 232);
+            }
+
             using (Brush b = new SolidBrush(plateBg))
-            using (Pen borderPen = new Pen(Color.FromArgb(145, 125, 115), 1))
+            using (Pen borderPen = new Pen(isDragOverActive ? Color.FromArgb(235, 175, 15) : Color.FromArgb(145, 125, 115), isDragOverActive ? 1.5f : 1.0f))
             {
                 g.FillRectangle(b, rect);
                 g.DrawRectangle(borderPen, rect.X, rect.Y, rect.Width - 1, rect.Height - 1);
@@ -510,13 +558,82 @@ namespace AZ5Launcher
                 g.DrawRectangle(innerPen, rect.X + 2, rect.Y + 2, rect.Width - 5, rect.Height - 5);
             }
 
-            // Target Name Text: e.g. CHROME or ASSIGN TARGET
-            string displayName = ActiveSlot.GetDisplayName();
-            using (Font font = new Font("Segoe UI", 10.5f, FontStyle.Bold))
+            // Target Name Text: e.g. CHROME, ASSIGN TARGET, or DROP HERE: NOTEPAD
+            string displayName;
+            if (isDragOverActive)
+            {
+                if (isDragTargetMainButton)
+                {
+                    displayName = "DROP HERE: " + dragDropPreviewName;
+                }
+                else
+                {
+                    displayName = "SLOT " + (dragTargetSlotIndex + 1) + ": " + dragDropPreviewName;
+                }
+            }
+            else
+            {
+                displayName = ActiveSlot.GetDisplayName();
+            }
+
+            using (Font font = new Font("Segoe UI", isDragOverActive ? 9.5f : 10.5f, FontStyle.Bold))
             {
                 TextRenderer.DrawText(g, displayName, font, rect, Color.FromArgb(25, 28, 35),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             }
+        }
+
+        private void DrawMainButtonDropOverlay(Graphics g)
+        {
+            int yOffset = isPressed ? 2 : 0;
+            int xOffset = isPressed ? 2 : 0;
+            int cx = CASING_X + 160 + xOffset;
+            int cy = CASING_Y + 155 + yOffset;
+
+            GraphicsState state = g.Save();
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            // Dashed glowing target circle on button dome
+            using (Pen ringPen = new Pen(Color.FromArgb(240, 255, 255, 255), 2.2f))
+            {
+                ringPen.DashStyle = DashStyle.Dash;
+                g.DrawEllipse(ringPen, cx - 62, cy - 62, 124, 124);
+            }
+
+            // Center badge / HUD card
+            int pillW = 172;
+            int pillH = 48;
+            Rectangle pillRect = new Rectangle(cx - pillW / 2, cy - pillH / 2, pillW, pillH);
+
+            using (GraphicsPath pillPath = CreateRoundedRectanglePath(pillRect, 8))
+            using (Brush b = new SolidBrush(Color.FromArgb(225, 18, 22, 30)))
+            using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 1.5f))
+            {
+                g.FillPath(b, pillPath);
+                g.DrawPath(p, pillPath);
+            }
+
+            // Line 1: "⬇ DROP HERE" (shows slot number if available)
+            string dropLabel = (dragTargetSlotIndex >= 0 && dragTargetSlotIndex < 4) ?
+                ("⬇ DROP HERE (SLOT " + (dragTargetSlotIndex + 1) + ")") :
+                "⬇ DROP HERE";
+
+            Rectangle line1 = new Rectangle(pillRect.X + 4, pillRect.Y + 4, pillRect.Width - 8, 16);
+            using (Font f1 = new Font("Segoe UI", 8.0f, FontStyle.Bold))
+            {
+                TextRenderer.DrawText(g, dropLabel, f1, line1, Color.FromArgb(255, 215, 60),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+
+            // Line 2: Target Preview Name
+            Rectangle line2 = new Rectangle(pillRect.X + 6, pillRect.Y + 20, pillRect.Width - 12, 24);
+            using (Font f2 = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+            {
+                TextRenderer.DrawText(g, dragDropPreviewName, f2, line2, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            }
+
+            g.Restore(state);
         }
 
         private void DrawCloseButton(Graphics g)
@@ -818,12 +935,23 @@ namespace AZ5Launcher
             Rectangle sRect = GetSlotRect(index, leftX);
             bool isActive = (index == activeSlotIndex);
             bool isHovered = (index == hoveringSlotIndex);
+            bool isDropTarget = isDragOverActive && (index == dragTargetSlotIndex);
             TargetSlot slot = targetSlots[index];
 
             Rectangle cardBounds = new Rectangle(sRect.X, sRect.Y, sRect.Width - 1, sRect.Height - 1);
             using (GraphicsPath path = CreateRoundedRectanglePath(cardBounds, 6))
             {
-                if (isActive)
+                if (isDropTarget)
+                {
+                    using (Brush b = new SolidBrush(Color.FromArgb(255, 253, 230)))
+                    using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 2.0f))
+                    {
+                        p.DashStyle = DashStyle.Dash;
+                        g.FillPath(b, path);
+                        g.DrawPath(p, path);
+                    }
+                }
+                else if (isActive)
                 {
                     using (Brush b = new SolidBrush(Color.FromArgb(255, 253, 235)))
                     using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 2))
@@ -844,24 +972,44 @@ namespace AZ5Launcher
                 }
             }
 
-            // Target Name: centered text, no numbers, no sub-labels, ellipses if too long
-            string dispName = slot.GetDisplayName();
-            Color nameColor;
-            if (string.IsNullOrEmpty(slot.Path) && string.IsNullOrEmpty(slot.Label))
+            if (isDropTarget)
             {
-                dispName = "EMPTY";
-                nameColor = Color.FromArgb(160, 170, 180);
+                // Drop target preview inside card: "DROP HERE" on top, item preview below
+                Rectangle dropTopRect = new Rectangle(sRect.X + 4, sRect.Y + 6, sRect.Width - 8, 16);
+                using (Font fontDrop = new Font("Segoe UI", 8.0f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(g, "⬇ DROP HERE", fontDrop, dropTopRect, Color.FromArgb(195, 120, 0),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+
+                Rectangle dropBottomRect = new Rectangle(sRect.X + 6, sRect.Y + 22, sRect.Width - 12, 26);
+                using (Font fontName = new Font("Segoe UI", 9.0f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(g, dragDropPreviewName, fontName, dropBottomRect, Color.FromArgb(20, 24, 32),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
             }
             else
             {
-                nameColor = isActive ? Color.FromArgb(20, 24, 32) : Color.FromArgb(60, 70, 85);
-            }
+                // Target Name: centered text, no numbers, no sub-labels, ellipses if too long
+                string dispName = slot.GetDisplayName();
+                Color nameColor;
+                if (string.IsNullOrEmpty(slot.Path) && string.IsNullOrEmpty(slot.Label))
+                {
+                    dispName = "EMPTY";
+                    nameColor = Color.FromArgb(160, 170, 180);
+                }
+                else
+                {
+                    nameColor = isActive ? Color.FromArgb(20, 24, 32) : Color.FromArgb(60, 70, 85);
+                }
 
-            Rectangle textRect = new Rectangle(sRect.X + 8, sRect.Y, sRect.Width - 16, sRect.Height);
-            using (Font fontN = new Font("Segoe UI", 9.5f, FontStyle.Bold))
-            {
-                TextRenderer.DrawText(g, dispName, fontN, textRect, nameColor,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                Rectangle textRect = new Rectangle(sRect.X + 8, sRect.Y, sRect.Width - 16, sRect.Height);
+                using (Font fontN = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(g, dispName, fontN, textRect, nameColor,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
             }
         }
 
@@ -1050,15 +1198,23 @@ namespace AZ5Launcher
             g.SmoothingMode = prevMode;
 
             // Target Path
-            string pathText = ActiveSlot.Path;
-            if (string.IsNullOrEmpty(pathText))
+            string pathText;
+            if (isDragOverActive)
             {
-                pathText = "No target path assigned • Click to configure";
+                pathText = "Assign: " + dragDropPath;
+            }
+            else
+            {
+                pathText = ActiveSlot.Path;
+                if (string.IsNullOrEmpty(pathText))
+                {
+                    pathText = "No target path assigned • Click to configure";
+                }
             }
 
             using (Font font = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             {
-                TextRenderer.DrawText(g, pathText, font, rect, Color.FromArgb(255, 60, 70, 85),
+                TextRenderer.DrawText(g, pathText, font, rect, isDragOverActive ? Color.FromArgb(255, 30, 40, 55) : Color.FromArgb(255, 60, 70, 85),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.PathEllipsis);
             }
         }
@@ -1260,6 +1416,11 @@ namespace AZ5Launcher
                     // Click was verified because drag threshold was not exceeded
                     LaunchProgram();
                 }
+                else
+                {
+                    // Window was moved: save new screen location
+                    SaveSettings();
+                }
             }
         }
 
@@ -1374,9 +1535,223 @@ namespace AZ5Launcher
             this.Cursor = Cursors.Default;
         }
 
+        private string ExtractDroppedPath(IDataObject data)
+        {
+            if (data != null && data.GetDataPresent(DataFormats.FileDrop))
+            {
+                string[] files = data.GetData(DataFormats.FileDrop) as string[];
+                if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0]))
+                {
+                    return files[0];
+                }
+            }
+            return null;
+        }
+
+        private static string GetPreviewNameFromPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return "";
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    string dirName = Path.GetFileName(trimmed);
+                    string folderName = string.IsNullOrEmpty(dirName) ? path.ToUpper() : dirName.ToUpper();
+                    return "/" + folderName.TrimStart('/');
+                }
+                string name = Path.GetFileNameWithoutExtension(path);
+                return string.IsNullOrEmpty(name) ? Path.GetFileName(path).ToUpper() : name.ToUpper();
+            }
+            catch
+            {
+                return path.ToUpper();
+            }
+        }
+
+        private bool IsSlotEmpty(int index)
+        {
+            if (index < 0 || index >= 4) return true;
+            return string.IsNullOrEmpty(targetSlots[index].Path);
+        }
+
+        private int GetFirstEmptySlotIndex()
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                if (IsSlotEmpty(i))
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private int GetMainButtonDropTargetSlot()
+        {
+            int emptyIdx = GetFirstEmptySlotIndex();
+            if (emptyIdx != -1)
+            {
+                return emptyIdx;
+            }
+            return activeSlotIndex;
+        }
+
+        private int DetermineDropSlot(Point pt)
+        {
+            // If left drawer is open and cursor is inside left drawer
+            if (leftProgress > 0.1f && pt.X < CASING_X)
+            {
+                int currentLeftX = GetCurrentLeftX();
+                for (int i = 0; i < 4; i++)
+                {
+                    Rectangle sRect = GetSlotRect(i, currentLeftX);
+                    if (pt.X >= currentLeftX && pt.X < currentLeftX + leftDrawerWidth &&
+                        pt.Y >= sRect.Top - 3 && pt.Y <= sRect.Bottom + 3)
+                    {
+                        return i;
+                    }
+                }
+                int clamped = Math.Max(0, Math.Min(3, (pt.Y - (leftDrawerY + 10)) / 59));
+                return clamped;
+            }
+
+            return GetMainButtonDropTargetSlot();
+        }
+
+        private void UpdateDragLocation(Point pt)
+        {
+            int prevTarget = dragTargetSlotIndex;
+            bool prevIsMain = isDragTargetMainButton;
+
+            if (!isLeftExpanded && (radiationButtonRect.Contains(pt) || pt.X < CASING_X))
+            {
+                ToggleLeftDrawer();
+            }
+
+            int slot = DetermineDropSlot(pt);
+            dragTargetSlotIndex = slot;
+            isDragTargetMainButton = !(leftProgress > 0.1f && pt.X < CASING_X);
+
+            if (prevTarget != dragTargetSlotIndex || prevIsMain != isDragTargetMainButton)
+            {
+                Invalidate();
+            }
+        }
+
+        private void ResetDragState()
+        {
+            if (isDragOverActive || dragTargetSlotIndex != -1)
+            {
+                isDragOverActive = false;
+                dragDropPath = "";
+                dragDropPreviewName = "";
+                dragTargetSlotIndex = -1;
+                isDragTargetMainButton = false;
+                Invalidate();
+            }
+        }
+
+        protected override void OnDragEnter(DragEventArgs drgevent)
+        {
+            base.OnDragEnter(drgevent);
+            string path = ExtractDroppedPath(drgevent.Data);
+            if (!string.IsNullOrEmpty(path))
+            {
+                drgevent.Effect = DragDropEffects.Copy;
+                isDragOverActive = true;
+                dragDropPath = SanitizePath(path);
+                dragDropPreviewName = GetPreviewNameFromPath(dragDropPath);
+                Point pt = this.PointToClient(new Point(drgevent.X, drgevent.Y));
+                UpdateDragLocation(pt);
+            }
+            else
+            {
+                drgevent.Effect = DragDropEffects.None;
+            }
+        }
+
+        protected override void OnDragOver(DragEventArgs drgevent)
+        {
+            base.OnDragOver(drgevent);
+            string path = ExtractDroppedPath(drgevent.Data);
+            if (!string.IsNullOrEmpty(path))
+            {
+                drgevent.Effect = DragDropEffects.Copy;
+                isDragOverActive = true;
+                if (string.IsNullOrEmpty(dragDropPath))
+                {
+                    dragDropPath = SanitizePath(path);
+                    dragDropPreviewName = GetPreviewNameFromPath(dragDropPath);
+                }
+                Point pt = this.PointToClient(new Point(drgevent.X, drgevent.Y));
+                UpdateDragLocation(pt);
+            }
+            else
+            {
+                drgevent.Effect = DragDropEffects.None;
+            }
+        }
+
+        protected override void OnDragLeave(EventArgs e)
+        {
+            base.OnDragLeave(e);
+            ResetDragState();
+        }
+
+        protected override void OnDragDrop(DragEventArgs drgevent)
+        {
+            base.OnDragDrop(drgevent);
+            string path = ExtractDroppedPath(drgevent.Data);
+            if (!string.IsNullOrEmpty(path))
+            {
+                Point pt = this.PointToClient(new Point(drgevent.X, drgevent.Y));
+                int targetSlot = DetermineDropSlot(pt);
+                if (targetSlot >= 0 && targetSlot < 4)
+                {
+                    targetSlots[targetSlot].Path = SanitizePath(path);
+                    targetSlots[targetSlot].Label = ""; // Clear custom label on new assignment
+                    activeSlotIndex = targetSlot;
+                    SaveSettings();
+                    PlayClickSound();
+                }
+            }
+            ResetDragState();
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            if (hasSavedLocation && IsLocationVisibleOnScreen(savedLocation.X, savedLocation.Y, this.Width, this.Height))
+            {
+                this.Location = savedLocation;
+                currentWindowLocation = savedLocation;
+            }
+            else
+            {
+                currentWindowLocation = this.Location;
+            }
+        }
+
+        protected override void OnLocationChanged(EventArgs e)
+        {
+            base.OnLocationChanged(e);
+            if (this.WindowState == FormWindowState.Normal)
+            {
+                currentWindowLocation = this.Location;
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+            SaveSettings();
+        }
+
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
+            SaveSettings();
             if (animTimer != null)
             {
                 animTimer.Stop();
@@ -1641,6 +2016,21 @@ namespace AZ5Launcher
                                     autoClose = parsedAutoClose;
                                 }
                             }
+                            if (lines.Length > 12)
+                            {
+                                int savedX, savedY;
+                                if (int.TryParse(lines[11], out savedX) && int.TryParse(lines[12], out savedY))
+                                {
+                                    if (IsLocationVisibleOnScreen(savedX, savedY, BASE_WIDTH, BASE_HEIGHT))
+                                    {
+                                        hasSavedLocation = true;
+                                        savedLocation = new Point(savedX, savedY);
+                                        currentWindowLocation = savedLocation;
+                                        this.StartPosition = FormStartPosition.Manual;
+                                        this.Location = savedLocation;
+                                    }
+                                }
+                            }
                         }
                         else
                         {
@@ -1661,27 +2051,13 @@ namespace AZ5Launcher
             {
                 string path = GetConfigPath();
 
-                bool hasAnyData = false;
                 for (int i = 0; i < 4; i++)
                 {
                     targetSlots[i].Path = SanitizePath(targetSlots[i].Path);
                     targetSlots[i].Label = SanitizeSingleLine(targetSlots[i].Label);
-                    if (!string.IsNullOrEmpty(targetSlots[i].Path) || !string.IsNullOrEmpty(targetSlots[i].Label))
-                    {
-                        hasAnyData = true;
-                    }
                 }
 
-                if (!hasAnyData && activeSlotIndex == 0 && !autoClose)
-                {
-                    if (File.Exists(path))
-                    {
-                        File.Delete(path);
-                    }
-                    return;
-                }
-
-                string[] lines = new string[11];
+                string[] lines = new string[13];
                 lines[0] = activeSlotIndex.ToString();
                 for (int i = 0; i < 4; i++)
                 {
@@ -1691,9 +2067,39 @@ namespace AZ5Launcher
                 lines[9] = "1.000";
                 lines[10] = autoClose.ToString();
 
+                Point loc = currentWindowLocation;
+                if (loc.IsEmpty)
+                {
+                    try
+                    {
+                        if (!this.Disposing && !this.IsDisposed)
+                        {
+                            loc = this.Location;
+                        }
+                    }
+                    catch { }
+                }
+
+                lines[11] = loc.X.ToString();
+                lines[12] = loc.Y.ToString();
+
                 File.WriteAllLines(path, lines);
             }
             catch { }
+        }
+
+        private static bool IsLocationVisibleOnScreen(int x, int y, int width, int height)
+        {
+            Rectangle targetRect = new Rectangle(x, y, width, height);
+            foreach (Screen screen in Screen.AllScreens)
+            {
+                Rectangle intersect = Rectangle.Intersect(screen.WorkingArea, targetRect);
+                if (intersect.Width >= 60 && intersect.Height >= 60)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }

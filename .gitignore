@@ -15,6 +15,7 @@ obj/
 
 # Package & archive formats
 *.zip
+AZ-5_Button_Release.zip
 *.tar
 *.tar.gz
 *.tgz
