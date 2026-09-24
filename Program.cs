@@ -717,11 +717,13 @@ namespace AZ5Launcher
         {
             Rectangle acRect = GetLeftAutoCloseRect(leftX);
             Color acBg = isHoveringLeftAutoClose ? Color.FromArgb(238, 243, 250) : Color.White;
+            Rectangle cardBounds = new Rectangle(acRect.X, acRect.Y, acRect.Width - 1, acRect.Height - 1);
+            using (GraphicsPath path = CreateRoundedRectanglePath(cardBounds, 6))
             using (Brush b = new SolidBrush(acBg))
             using (Pen p = new Pen(isHoveringLeftAutoClose ? Color.FromArgb(140, 170, 210) : Color.FromArgb(220, 225, 230), 1))
             {
-                g.FillRectangle(b, acRect);
-                g.DrawRectangle(p, acRect.X, acRect.Y, acRect.Width - 1, acRect.Height - 1);
+                g.FillPath(b, path);
+                g.DrawPath(p, path);
             }
 
             int boxSize = 14;
@@ -745,6 +747,32 @@ namespace AZ5Launcher
             path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
             path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
             path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        private static GraphicsPath CreateTopRoundedPath(Rectangle rect, int r)
+        {
+            GraphicsPath path = new GraphicsPath();
+            int d = r * 2;
+            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+            path.AddArc(rect.Right - 1 - d, rect.Y, d, d, 270, 90);
+            path.AddLine(rect.Right - 1, rect.Y + r, rect.Right - 1, rect.Bottom);
+            path.AddLine(rect.Right - 1, rect.Bottom, rect.X, rect.Bottom);
+            path.AddLine(rect.X, rect.Bottom, rect.X, rect.Y + r);
+            path.CloseFigure();
+            return path;
+        }
+
+        private static GraphicsPath CreateBottomRoundedPath(Rectangle rect, int r)
+        {
+            GraphicsPath path = new GraphicsPath();
+            int d = r * 2;
+            path.AddLine(rect.X, rect.Y, rect.Right - 1, rect.Y);
+            path.AddLine(rect.Right - 1, rect.Y, rect.Right - 1, rect.Bottom - 1 - r);
+            path.AddArc(rect.Right - 1 - d, rect.Bottom - 1 - d, d, d, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - 1 - d, d, d, 90, 90);
+            path.AddLine(rect.X, rect.Bottom - 1 - r, rect.X, rect.Y);
             path.CloseFigure();
             return path;
         }
@@ -792,23 +820,27 @@ namespace AZ5Launcher
             bool isHovered = (index == hoveringSlotIndex);
             TargetSlot slot = targetSlots[index];
 
-            if (isActive)
+            Rectangle cardBounds = new Rectangle(sRect.X, sRect.Y, sRect.Width - 1, sRect.Height - 1);
+            using (GraphicsPath path = CreateRoundedRectanglePath(cardBounds, 6))
             {
-                using (Brush b = new SolidBrush(Color.FromArgb(255, 253, 235)))
-                using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 2))
+                if (isActive)
                 {
-                    g.FillRectangle(b, sRect);
-                    g.DrawRectangle(p, sRect.X, sRect.Y, sRect.Width - 1, sRect.Height - 1);
+                    using (Brush b = new SolidBrush(Color.FromArgb(255, 253, 235)))
+                    using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 2))
+                    {
+                        g.FillPath(b, path);
+                        g.DrawPath(p, path);
+                    }
                 }
-            }
-            else
-            {
-                Color bg = isHovered ? Color.FromArgb(238, 243, 250) : Color.White;
-                using (Brush b = new SolidBrush(bg))
-                using (Pen p = new Pen(isHovered ? Color.FromArgb(140, 170, 210) : Color.FromArgb(220, 225, 230), 1))
+                else
                 {
-                    g.FillRectangle(b, sRect);
-                    g.DrawRectangle(p, sRect.X, sRect.Y, sRect.Width - 1, sRect.Height - 1);
+                    Color bg = isHovered ? Color.FromArgb(238, 243, 250) : Color.White;
+                    using (Brush b = new SolidBrush(bg))
+                    using (Pen p = new Pen(isHovered ? Color.FromArgb(140, 170, 210) : Color.FromArgb(220, 225, 230), 1))
+                    {
+                        g.FillPath(b, path);
+                        g.DrawPath(p, path);
+                    }
                 }
             }
 
@@ -955,11 +987,13 @@ namespace AZ5Launcher
 
             SmoothingMode prevMode = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.None;
-            g.FillRectangle(Brushes.White, rect);
-
-            using (Pen borderPen = new Pen(Color.FromArgb(170, 180, 190), 1))
+            using (GraphicsPath path = CreateTopRoundedPath(rect, 10))
             {
-                g.DrawRectangle(borderPen, rect.X, rect.Y, rect.Width - 1, rect.Height - 1);
+                g.FillPath(Brushes.White, path);
+                using (Pen borderPen = new Pen(Color.FromArgb(170, 180, 190), 1))
+                {
+                    g.DrawPath(borderPen, path);
+                }
             }
             g.SmoothingMode = prevMode;
 
@@ -1005,11 +1039,13 @@ namespace AZ5Launcher
             // Card background and border (SmoothingMode.None prevents antialiasing against Magenta)
             SmoothingMode prevMode = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.None;
-            g.FillRectangle(Brushes.White, rect);
-
-            using (Pen borderPen = new Pen(Color.FromArgb(170, 180, 190), 1))
+            using (GraphicsPath path = CreateBottomRoundedPath(rect, 10))
             {
-                g.DrawRectangle(borderPen, rect.X, rect.Y, rect.Width - 1, rect.Height - 1);
+                g.FillPath(Brushes.White, path);
+                using (Pen borderPen = new Pen(Color.FromArgb(170, 180, 190), 1))
+                {
+                    g.DrawPath(borderPen, path);
+                }
             }
             g.SmoothingMode = prevMode;
 
