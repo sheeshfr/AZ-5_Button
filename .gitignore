@@ -1,0 +1,19 @@
+# User configuration / local paths
+settings.txt
+
+# Build output & Release archives
+*.exe
+*.zip
+*.7z
+*.rar
+
+# OS metadata
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+.DS_Store
+
+# IDE / Editor folders
+.vs/
+.idea/
+.vscode/
