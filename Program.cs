@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -300,6 +301,27 @@ namespace AZ5Launcher
             var clearItem = new ToolStripMenuItem("Clear Target", null, (s, e) => ClearTarget(activeSlotIndex));
             var autoCloseItem = new ToolStripMenuItem("Auto-Close on Launch", null, (s, e) => ToggleAutoClose());
             contextMenu.Opening += (s, e) => {
+                Point clientPt = this.PointToClient(Cursor.Position);
+                if (leftProgress > 0.1f && clientPt.X < CASING_X)
+                {
+                    int currentLeftX = GetCurrentLeftX();
+                    for (int i = 0; i < 4; i++)
+                    {
+                        Rectangle sRect = GetSlotRect(i, currentLeftX);
+                        if (sRect.Contains(clientPt))
+                        {
+                            if (activeSlotIndex != i)
+                            {
+                                activeSlotIndex = i;
+                                SaveSettings();
+                                Invalidate();
+                                Update();
+                            }
+                            break;
+                        }
+                    }
+                }
+
                 bool hasTarget = !string.IsNullOrEmpty(ActiveSlot.Path) || !string.IsNullOrEmpty(ActiveSlot.Label);
                 renameItem.Enabled = hasTarget;
                 clearItem.Enabled = hasTarget;
@@ -588,16 +610,16 @@ namespace AZ5Launcher
             int yOffset = isPressed ? 2 : 0;
             int xOffset = isPressed ? 2 : 0;
             int cx = CASING_X + 160 + xOffset;
-            int cy = CASING_Y + 155 + yOffset;
+            int cy = CASING_Y + 95 + yOffset;
 
             GraphicsState state = g.Save();
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            // Dashed glowing target circle on button dome
+            // Dashed glowing target ellipse matching the button head
             using (Pen ringPen = new Pen(Color.FromArgb(240, 255, 255, 255), 2.2f))
             {
                 ringPen.DashStyle = DashStyle.Dash;
-                g.DrawEllipse(ringPen, cx - 62, cy - 62, 124, 124);
+                g.DrawEllipse(ringPen, cx - 105, cy - 75, 210, 150);
             }
 
             // Center badge / HUD card
@@ -1256,23 +1278,6 @@ namespace AZ5Launcher
             }
         }
 
-        private void ShowSlotContextMenu(int index, Point screenLocation)
-        {
-            ContextMenuStrip slotMenu = new ContextMenuStrip();
-            slotMenu.Items.Add("Assign File...", null, (s, e) => AssignTargetFile(index));
-            slotMenu.Items.Add("Assign Folder...", null, (s, e) => AssignTargetFolder(index));
-            
-            var renItem = new ToolStripMenuItem("Rename Label...", null, (s, e) => RenameLabel(index));
-            renItem.Enabled = !string.IsNullOrEmpty(targetSlots[index].Path) || !string.IsNullOrEmpty(targetSlots[index].Label);
-            slotMenu.Items.Add(renItem);
-
-            var clrItem = new ToolStripMenuItem("Clear Target", null, (s, e) => ClearTarget(index));
-            clrItem.Enabled = !string.IsNullOrEmpty(targetSlots[index].Path) || !string.IsNullOrEmpty(targetSlots[index].Label);
-            slotMenu.Items.Add(clrItem);
-
-            slotMenu.Show(screenLocation);
-        }
-
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
@@ -1297,8 +1302,14 @@ namespace AZ5Launcher
                         Rectangle sRect = GetSlotRect(i, currentLeftX);
                         if (sRect.Contains(virtualPt))
                         {
-                            ShowSlotContextMenu(i, Cursor.Position);
-                            return;
+                            if (activeSlotIndex != i)
+                            {
+                                activeSlotIndex = i;
+                                SaveSettings();
+                                Invalidate();
+                                Update();
+                            }
+                            break;
                         }
                     }
                 }
@@ -1388,16 +1399,43 @@ namespace AZ5Launcher
                     return;
                 }
 
-                // 10. Check button casing (anywhere in casing bounds)
+                // 10. Check button press vs window dragging on casing
                 if (virtualPt.X >= casingLeft && virtualPt.X < casingRight && virtualPt.Y >= casingTop && virtualPt.Y < casingBottom)
                 {
-                    isPressed = true;
+                    bool onButton = IsPointOnButton(virtualPt, xOffset, yOffset);
+                    if (onButton)
+                    {
+                        isPressed = true;
+                    }
+                    else
+                    {
+                        isPressed = false;
+                    }
+
                     isDragging = true;
                     dragStartCursor = Cursor.Position;
                     mouseDownCursor = Cursor.Position; // Save original press spot
-                    Invalidate();
+                    if (onButton)
+                    {
+                        Invalidate();
+                    }
                 }
             }
+        }
+
+        private bool IsPointOnButton(Point virtualPt, int xOffset, int yOffset)
+        {
+            int casingLeft = CASING_X + xOffset;
+            int casingTop = CASING_Y + yOffset;
+            int lx = virtualPt.X - casingLeft;
+            int ly = virtualPt.Y - casingTop;
+
+            // Button head spans X: ~53..267 (width 214), Y: ~20..170 (height 150)
+            // Centered at (160, 95) relative to casing
+            // Radii: rx = 105, ry = 75
+            double dx = (lx - 160.0) / 105.0;
+            double dy = (ly - 95.0) / 75.0;
+            return (dx * dx + dy * dy) <= 1.0;
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
@@ -1515,10 +1553,11 @@ namespace AZ5Launcher
                 Invalidate();
             }
 
-            bool inCasing = (virtualPt.X >= casingLeft && virtualPt.X < casingRight && virtualPt.Y >= casingTop && virtualPt.Y < casingBottom);
+            bool onButton = (virtualPt.X >= casingLeft && virtualPt.X < casingRight && virtualPt.Y >= casingTop && virtualPt.Y < casingBottom) &&
+                            IsPointOnButton(virtualPt, xOffset, yOffset);
 
-            // Set cursor type
-            if (hoveringClose || hoveringHelp || hoveringRadiation || hoveringArrow || hoveringNameplate || newHoverSlot != -1 || hoveringLeftAc || inVisibleHelp || inVisibleTarget || inCasing)
+            // Set cursor type: only show Hand cursor for actual interactive elements and the button itself
+            if (hoveringClose || hoveringHelp || hoveringRadiation || hoveringArrow || hoveringNameplate || newHoverSlot != -1 || hoveringLeftAc || inVisibleHelp || inVisibleTarget || onButton)
             {
                 this.Cursor = Cursors.Hand;
             }
@@ -1535,9 +1574,144 @@ namespace AZ5Launcher
             this.Cursor = Cursors.Default;
         }
 
+        [DllImport("shell32.dll", ExactSpelling = true)]
+        private static extern IntPtr ILCombine(IntPtr pidl1, IntPtr pidl2);
+
+        [DllImport("shell32.dll", ExactSpelling = true)]
+        private static extern void ILFree(IntPtr pidl);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        private static extern bool SHGetPathFromIDList(IntPtr pidl, StringBuilder pszPath);
+
+        private static string ExtractPathFromShellIdList(IDataObject data)
+        {
+            if (data == null || !data.GetDataPresent("Shell IDList Array"))
+            {
+                return null;
+            }
+
+            try
+            {
+                object raw = data.GetData("Shell IDList Array");
+                MemoryStream ms = raw as MemoryStream;
+                if (ms == null) return null;
+
+                byte[] bytes = ms.ToArray();
+                if (bytes.Length < 12) return null;
+
+                IntPtr ptr = Marshal.AllocHGlobal(bytes.Length);
+                try
+                {
+                    Marshal.Copy(bytes, 0, ptr, bytes.Length);
+
+                    int cidl = Marshal.ReadInt32(ptr, 0);
+                    if (cidl < 1) return null;
+
+                    int parentOffset = Marshal.ReadInt32(ptr, 4);
+                    int itemOffset = Marshal.ReadInt32(ptr, 8);
+
+                    if (parentOffset < 0 || parentOffset >= bytes.Length || itemOffset < 0 || itemOffset >= bytes.Length)
+                        return null;
+
+                    IntPtr parentPidl = new IntPtr(ptr.ToInt64() + parentOffset);
+                    IntPtr itemPidl = new IntPtr(ptr.ToInt64() + itemOffset);
+
+                    IntPtr combinedPidl = ILCombine(parentPidl, itemPidl);
+                    if (combinedPidl != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            StringBuilder sb = new StringBuilder(1024);
+                            if (SHGetPathFromIDList(combinedPidl, sb))
+                            {
+                                string result = sb.ToString();
+                                if (!string.IsNullOrEmpty(result) && (File.Exists(result) || Directory.Exists(result)))
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            ILFree(combinedPidl);
+                        }
+                    }
+
+                    // Fallback: check item PIDL directly if parent combination was not needed
+                    StringBuilder sbItem = new StringBuilder(1024);
+                    if (SHGetPathFromIDList(itemPidl, sbItem))
+                    {
+                        string resultItem = sbItem.ToString();
+                        if (!string.IsNullOrEmpty(resultItem) && (File.Exists(resultItem) || Directory.Exists(resultItem)))
+                        {
+                            return resultItem;
+                        }
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(ptr);
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private static string ExtractPathFromFileName(IDataObject data)
+        {
+            if (data == null) return null;
+            string[] formats = new string[] { "FileNameW", "FileName" };
+            foreach (string format in formats)
+            {
+                if (data.GetDataPresent(format))
+                {
+                    try
+                    {
+                        object obj = data.GetData(format);
+                        if (obj is string)
+                        {
+                            string s = (string)obj;
+                            if (!string.IsNullOrEmpty(s) && (File.Exists(s) || Directory.Exists(s)))
+                                return s;
+                        }
+                        else if (obj is string[])
+                        {
+                            string[] arr = (string[])obj;
+                            if (arr != null && arr.Length > 0 && !string.IsNullOrEmpty(arr[0]))
+                            {
+                                if (File.Exists(arr[0]) || Directory.Exists(arr[0]))
+                                    return arr[0];
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            return null;
+        }
+
         private string ExtractDroppedPath(IDataObject data)
         {
-            if (data != null && data.GetDataPresent(DataFormats.FileDrop))
+            if (data == null) return null;
+
+            // 1. Try Shell IDList Array first - this preserves the actual .lnk shortcut file path
+            // instead of letting Windows Explorer resolve it to its target executable (which strips command arguments)
+            string shellPath = ExtractPathFromShellIdList(data);
+            if (!string.IsNullOrEmpty(shellPath))
+            {
+                return shellPath;
+            }
+
+            // 2. Try FileNameW / FileName formats
+            string fnPath = ExtractPathFromFileName(data);
+            if (!string.IsNullOrEmpty(fnPath))
+            {
+                return fnPath;
+            }
+
+            // 3. Fall back to standard FileDrop
+            if (data.GetDataPresent(DataFormats.FileDrop))
             {
                 string[] files = data.GetData(DataFormats.FileDrop) as string[];
                 if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0]))
@@ -1812,6 +1986,7 @@ namespace AZ5Launcher
             {
                 ofd.Title = "Select Target File";
                 ofd.Filter = "All Files (*.*)|*.*";
+                ofd.DereferenceLinks = false;
                 if (ofd.ShowDialog() == DialogResult.OK)
                 {
                     targetSlots[slotIndex].Path = SanitizePath(ofd.FileName);
