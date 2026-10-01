@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="screenshot.png" alt="AZ-5 Button" width="380" />
+  <img src="screenshot.png" alt="AZ-5 Button" width="440" />
   <h1>AZ-5 Button</h1>
 </div>
 
