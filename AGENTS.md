@@ -13,10 +13,12 @@
 - **Visual Assets**:
   - `az5_button.png`: Embedded background casing resource.
   - `app.ico`: Embedded multi-resolution application icon.
-- **Popout Menus**:
-  - **Left Drawer**: 4 target slots + Auto-Close checkbox (toggled via bottom-left arrow button).
-  - **Bottom Drawer**: Active target file/folder path (toggled via bottom-right down arrow button).
+- **Popout Menus & Trays**:
+  - **Left Drawer**: 4 target slots + editable title header (toggled via bottom-left arrow button).
+  - **Right Drawer**: 4 target slots + editable title header (toggled via bottom-right arrow button).
+  - **Bottom Tray**: Active target file/folder path (permanently visible at all times).
   - **Top Drawer**: Quick instructions & help card (toggled via top-left spinning radiation button).
+  - **Slot Rearranging**: Users can click and drag slots within or between drawers to rearrange them (clears original spot on move, swaps if dropping onto an occupied slot).
 - **Transparency**: Uses `Color.Magenta` transparency key. Drawer outlines and chassis edges use `SmoothingMode.None` against transparent bounds to prevent pink anti-aliasing artifacts on Windows.
 
 ## Building & Running

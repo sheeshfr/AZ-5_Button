@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="screenshot.png" alt="AZ-5 Button" width="440" />
+  <img src="screenshot.png" alt="AZ-5 Button" width="580" />
   <h1>AZ-5 Button</h1>
 </div>
 
@@ -17,10 +17,10 @@
 
 1. **Slam the Red Button** to launch your target.
 2. **Right-Click** to configure your target.
-3. **Left Arrow**: Switch between 4 target presets.
-4. **Down Arrow**: View the target path.
+3. **Left & Right Arrows**: Switch between 8 target presets across two customizable pull-out menus (4 slots each with editable group titles).
+4. **Bottom Tray**: View and configure the active target path (permanently visible).
 5. **Radiation Button**: View quick instructions.
-6. **Auto-Close?**: Automatically exit after launching.
+6. **Rearrange Targets**: Click and drag target cards around to rearrange them between slots or menus.
 
 ---
 

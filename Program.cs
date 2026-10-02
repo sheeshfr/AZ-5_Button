@@ -60,7 +60,7 @@ namespace AZ5Launcher
         private Bitmap bgImage;
         private Bitmap cachedCasingImage;
         private Bitmap cachedPressedCasingImage;
-        private TargetSlot[] targetSlots = new TargetSlot[4];
+        private TargetSlot[] targetSlots = new TargetSlot[8];
         private int activeSlotIndex = 0;
 
         private TargetSlot ActiveSlot
@@ -70,8 +70,8 @@ namespace AZ5Launcher
 
         private bool isPressed = false;
 
-        // Base virtual canvas layout (Width 460, Height 455)
-        private const int BASE_WIDTH = 460;
+        // Virtual canvas layout (Width 600 accommodates both left & right 136px popout drawers)
+        private const int BASE_WIDTH = 600;
         private const int BASE_HEIGHT = 455;
         private const int CASING_X = 140;
         private const int CASING_Y = 60;
@@ -101,23 +101,13 @@ namespace AZ5Launcher
         // Hover states for corner buttons & nameplate
         private bool isHoveringClose = false;
         private bool isHoveringHelp = false;
-        private bool isHoveringRadiation = false;
-        private bool isHoveringArrow = false;
+        private bool isHoveringLeftArrow = false;
+        private bool isHoveringRightArrow = false;
         private bool isHoveringNameplate = false;
-        private bool isHoveringLeftAutoClose = false;
+        private bool isHoveringLeftTitle = false;
+        private bool isHoveringRightTitle = false;
 
-        // Auto-Close on launch state (default: unchecked / false)
-        private bool autoClose = false;
-
-        // Bottom path drawer animation state
-        private bool isCardExpanded = false;
-        private float cardProgress = 0.0f; // 0.0f = hidden, 1.0f = fully visible
-        private float currentArrowAngle = 0.0f; // 0.0f = down, 180.0f = up
-        private Stopwatch cardStopwatch = new Stopwatch();
-        private float animCardStart = 0.0f;
-        private float animCardTarget = 0.0f;
-        private readonly int textCardHiddenY = CASING_Y + 280;
-        private readonly int textCardExpandedY = CASING_Y + 308;
+        // Bottom target path card: visible at all times
         private readonly Rectangle textCardRect = new Rectangle(CASING_X + 10, CASING_Y + 308, 300, 30);
 
         // Top help drawer animation state
@@ -143,14 +133,40 @@ namespace AZ5Launcher
         private readonly int leftDrawerWidth = 136;
         private readonly int leftDrawerY = 70;
         private readonly int leftDrawerHeight = 290;
-        private int hoveringSlotIndex = -1; // 0..3 or -1
 
-        // Drag-and-drop state variables
+        // Right target presets drawer animation state
+        private bool isRightExpanded = false;
+        private float rightProgress = 0.0f; // 0.0f = hidden, 1.0f = fully visible
+        private float currentRightArrowAngle = 0.0f; // 0.0f = facing right, 180.0f = facing left
+        private Stopwatch rightStopwatch = new Stopwatch();
+        private float animRightStart = 0.0f;
+        private float animRightTarget = 0.0f;
+        private readonly int rightDrawerHiddenX = CASING_X + CASING_WIDTH - 136 + 8; // 332
+        private readonly int rightDrawerExpandedX = CASING_X + CASING_WIDTH - 4; // 456
+
+        private int hoveringSlotIndex = -1; // 0..7 or -1
+
+        // Drawer titles and inline editor
+        private string leftDrawerTitle = "";
+        private string rightDrawerTitle = "";
+        private TextBox titleTextBox;
+        private int editingTitleDrawer = -1; // -1 = none, 0 = left, 1 = right
+
+        // Drag-and-drop state variables (external file drop)
         private bool isDragOverActive = false;
         private string dragDropPath = "";
         private string dragDropPreviewName = "";
-        private int dragTargetSlotIndex = -1; // 0..3
+        private int dragTargetSlotIndex = -1; // 0..7
         private bool isDragTargetMainButton = false;
+
+        // Internal slot rearrange drag-and-drop state
+        private bool isPotentialSlotDrag = false;
+        private bool isSlotDragging = false;
+        private int pendingSlotIndex = -1;
+        private int slotDragSourceIndex = -1;
+        private int slotDragTargetIndex = -1;
+        private Point slotDragStartCursor = Point.Empty;
+        private Point slotDragCurrentPt = Point.Empty;
 
         // Win32 constants to block Alt+Enter and window resizing/maximizing
         private const int WM_SYSKEYDOWN = 0x0104;
@@ -160,6 +176,31 @@ namespace AZ5Launcher
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (isSlotDragging && (keyData == Keys.Escape))
+            {
+                isSlotDragging = false;
+                isPotentialSlotDrag = false;
+                pendingSlotIndex = -1;
+                slotDragSourceIndex = -1;
+                slotDragTargetIndex = -1;
+                this.Capture = false;
+                Invalidate();
+                return true;
+            }
+
+            if (editingTitleDrawer != -1 && (keyData == Keys.Enter || keyData == Keys.Return || keyData == Keys.Escape))
+            {
+                if (keyData == Keys.Escape)
+                {
+                    CancelTitleEdit();
+                }
+                else
+                {
+                    CommitTitleEdit();
+                }
+                return true;
+            }
+
             if ((keyData & Keys.KeyCode) == Keys.Enter && (keyData & Keys.Alt) == Keys.Alt)
             {
                 return true; // Completely suppress Alt+Enter
@@ -219,7 +260,7 @@ namespace AZ5Launcher
 
         public Program()
         {
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 8; i++)
             {
                 targetSlots[i] = new TargetSlot();
             }
@@ -238,6 +279,22 @@ namespace AZ5Launcher
             this.AllowDrop = true;
             this.SetStyle(ControlStyles.ResizeRedraw, false);
             this.Text = "AZ-5 Button";
+
+            // Set up inline title editor TextBox
+            titleTextBox = new TextBox();
+            titleTextBox.Visible = false;
+            titleTextBox.BorderStyle = BorderStyle.None;
+            titleTextBox.TextAlign = HorizontalAlignment.Center;
+            titleTextBox.Font = new Font("Segoe UI", 9.0f, FontStyle.Bold);
+            titleTextBox.BackColor = Color.White;
+            titleTextBox.ForeColor = Color.FromArgb(30, 40, 55);
+            titleTextBox.MaxLength = 32;
+
+            titleTextBox.Leave += (s, e) => {
+                CommitTitleEdit();
+            };
+
+            this.Controls.Add(titleTextBox);
 
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
 
@@ -289,17 +346,16 @@ namespace AZ5Launcher
             animTimer.Interval = 15; // ~60 FPS
             animTimer.Tick += AnimTimer_Tick;
 
-            // Load settings (including multi-slot and scale persistence)
+            // Load settings (including multi-slot, titles, and scale persistence)
             LoadSettings();
 
-            // Set up main context menu
+            // Set up main context menu (no auto-close)
             contextMenu = new ContextMenuStrip();
             contextMenu.Items.Add("Assign Target File...", null, (s, e) => AssignTargetFile(activeSlotIndex));
             contextMenu.Items.Add("Assign Target Folder...", null, (s, e) => AssignTargetFolder(activeSlotIndex));
             
             var renameItem = new ToolStripMenuItem("Rename Target Label...", null, (s, e) => RenameLabel(activeSlotIndex));
             var clearItem = new ToolStripMenuItem("Clear Target", null, (s, e) => ClearTarget(activeSlotIndex));
-            var autoCloseItem = new ToolStripMenuItem("Auto-Close on Launch", null, (s, e) => ToggleAutoClose());
             contextMenu.Opening += (s, e) => {
                 Point clientPt = this.PointToClient(Cursor.Position);
                 if (leftProgress > 0.1f && clientPt.X < CASING_X)
@@ -321,16 +377,32 @@ namespace AZ5Launcher
                         }
                     }
                 }
+                else if (rightProgress > 0.1f && clientPt.X > CASING_X + CASING_WIDTH)
+                {
+                    int currentRightX = GetCurrentRightX();
+                    for (int i = 4; i < 8; i++)
+                    {
+                        Rectangle sRect = GetSlotRect(i, currentRightX);
+                        if (sRect.Contains(clientPt))
+                        {
+                            if (activeSlotIndex != i)
+                            {
+                                activeSlotIndex = i;
+                                SaveSettings();
+                                Invalidate();
+                                Update();
+                            }
+                            break;
+                        }
+                    }
+                }
 
                 bool hasTarget = !string.IsNullOrEmpty(ActiveSlot.Path) || !string.IsNullOrEmpty(ActiveSlot.Label);
                 renameItem.Enabled = hasTarget;
                 clearItem.Enabled = hasTarget;
-                autoCloseItem.Checked = autoClose;
             };
             contextMenu.Items.Add(renameItem);
             contextMenu.Items.Add(clearItem);
-            contextMenu.Items.Add("-");
-            contextMenu.Items.Add(autoCloseItem);
             contextMenu.Items.Add("-");
             contextMenu.Items.Add("Exit", null, (s, e) => Application.Exit());
 
@@ -419,6 +491,7 @@ namespace AZ5Launcher
             int casingTop = CASING_Y + yOffset;
             int casingBottom = CASING_Y + CASING_HEIGHT + yOffset;
             int casingLeft = CASING_X + xOffset;
+            int casingRight = casingLeft + CASING_WIDTH;
 
             // 1. Draw Left Target Drawer (layer underneath left edge of casing)
             if (leftProgress > 0.001f)
@@ -426,19 +499,22 @@ namespace AZ5Launcher
                 DrawLeftDrawer(g);
             }
 
-            // 2. Draw Top Help Card (layer underneath top edge of casing)
+            // 2. Draw Right Target Drawer (layer underneath right edge of casing)
+            if (rightProgress > 0.001f)
+            {
+                DrawRightDrawer(g);
+            }
+
+            // 3. Draw Top Help Card (layer underneath top edge of casing)
             if (helpProgress > 0.001f)
             {
                 DrawHelpCard(g);
             }
 
-            // 3. Draw Bottom Target Path Card (layer underneath bottom edge of casing)
-            if (cardProgress > 0.001f)
-            {
-                DrawTextCard(g);
-            }
+            // 4. Draw Bottom Target Path Card: always visible at all times!
+            DrawTextCard(g);
 
-            // 4. Draw the button casing image (ON TOP OF all drawers)
+            // 5. Draw the button casing image (ON TOP OF all drawers)
             if (cachedCasingImage != null)
             {
                 Bitmap imgToDraw = isPressed ? cachedPressedCasingImage : cachedCasingImage;
@@ -472,7 +548,7 @@ namespace AZ5Launcher
                 g.FillEllipse(Brushes.Red, casingLeft + 160 - 65, casingTop + 155 - 65, 130, 130);
             }
 
-            // 5. Contact shadow along top edge of casing onto help card
+            // 6. Contact shadow along top edge of casing onto help card
             if (helpProgress > 0.001f)
             {
                 int currentHelpY = GetCurrentHelpY();
@@ -491,26 +567,22 @@ namespace AZ5Launcher
                 }
             }
 
-            // 6. Contact shadow along bottom edge of casing onto target path card
-            if (cardProgress > 0.001f)
+            // 7. Contact shadow along bottom edge of casing onto permanently visible target path card
+            int cardBottom = textCardRect.Y + textCardRect.Height + yOffset;
+            if (cardBottom > casingBottom)
             {
-                int currentY = GetCurrentCardY();
-                int cardBottom = currentY + textCardRect.Height + yOffset;
-                if (cardBottom > casingBottom)
+                int shadowH = Math.Min(6, cardBottom - casingBottom);
+                using (var shadowBrush = new LinearGradientBrush(
+                    new Rectangle(textCardRect.X + xOffset, casingBottom, textCardRect.Width, shadowH),
+                    Color.FromArgb(90, 0, 0, 0),
+                    Color.Transparent,
+                    LinearGradientMode.Vertical))
                 {
-                    int shadowH = Math.Min(6, cardBottom - casingBottom);
-                    using (var shadowBrush = new LinearGradientBrush(
-                        new Rectangle(textCardRect.X + xOffset, casingBottom, textCardRect.Width, shadowH),
-                        Color.FromArgb(90, 0, 0, 0),
-                        Color.Transparent,
-                        LinearGradientMode.Vertical))
-                    {
-                        g.FillRectangle(shadowBrush, textCardRect.X + xOffset, casingBottom, textCardRect.Width, shadowH);
-                    }
+                    g.FillRectangle(shadowBrush, textCardRect.X + xOffset, casingBottom, textCardRect.Width, shadowH);
                 }
             }
 
-            // 7. Contact shadow along left edge of casing onto left drawer
+            // 8. Contact shadow along left edge of casing onto left drawer
             if (leftProgress > 0.001f)
             {
                 int currentLeftX = GetCurrentLeftX();
@@ -530,20 +602,45 @@ namespace AZ5Launcher
                 }
             }
 
-            // 8. Target name sitting directly at the bottom of the casing image
+            // 9. Contact shadow along right edge of casing onto right drawer
+            if (rightProgress > 0.001f)
+            {
+                int currentRightX = GetCurrentRightX();
+                int exposedRight = currentRightX + leftDrawerWidth + xOffset;
+                if (exposedRight > casingRight)
+                {
+                    int shadowW = Math.Min(8, exposedRight - casingRight);
+                    using (var shadowBrush = new LinearGradientBrush(
+                        new Rectangle(casingRight, leftDrawerY + 8 + yOffset, shadowW, leftDrawerHeight - 16),
+                        Color.FromArgb(70, 0, 0, 0),
+                        Color.Transparent,
+                        LinearGradientMode.Horizontal))
+                    {
+                        g.FillRectangle(shadowBrush, casingRight, leftDrawerY + 8 + yOffset, shadowW, leftDrawerHeight - 16);
+                    }
+                }
+            }
+
+            // 10. Target name sitting directly at the bottom of the casing image
             DrawNameplate(g);
 
-            // 8b. Drag-and-drop HUD overlay over SCRAM button
+            // 11. Drag-and-drop HUD overlay over SCRAM button
             if (isDragOverActive && isDragTargetMainButton)
             {
                 DrawMainButtonDropOverlay(g);
             }
 
-            // 9. Draw all 4 corner action buttons on the casing
+            // 12. Draw all 4 corner action buttons on the casing
             DrawCloseButton(g);
             DrawRadiationButton(g);
             DrawLeftArrowButton(g);
-            DrawArrowButton(g);
+            DrawRightArrowButton(g);
+
+            // 13. Draw floating slot badge during drag-to-rearrange
+            if (isSlotDragging)
+            {
+                DrawFloatingSlotBadge(g);
+            }
         }
 
         private void DrawNameplate(Graphics g)
@@ -636,7 +733,7 @@ namespace AZ5Launcher
             }
 
             // Line 1: "⬇ DROP HERE" (shows slot number if available)
-            string dropLabel = (dragTargetSlotIndex >= 0 && dragTargetSlotIndex < 4) ?
+            string dropLabel = (dragTargetSlotIndex >= 0 && dragTargetSlotIndex < 8) ?
                 ("⬇ DROP HERE (SLOT " + (dragTargetSlotIndex + 1) + ")") :
                 "⬇ DROP HERE";
 
@@ -728,7 +825,7 @@ namespace AZ5Launcher
             int xOffset = isPressed ? 2 : 0;
             Rectangle rect = new Rectangle(radiationButtonRect.X + xOffset, radiationButtonRect.Y + yOffset, radiationButtonRect.Width, radiationButtonRect.Height);
 
-            Color bgColor = (isHoveringRadiation || isLeftExpanded) ? Color.FromArgb(70, 80, 95) : Color.FromArgb(160, 180, 180, 180);
+            Color bgColor = (isHoveringLeftArrow || isLeftExpanded) ? Color.FromArgb(70, 80, 95) : Color.FromArgb(160, 180, 180, 180);
             using (Brush brush = new SolidBrush(bgColor))
             {
                 g.FillEllipse(brush, rect);
@@ -759,13 +856,13 @@ namespace AZ5Launcher
             g.Restore(state);
         }
 
-        private void DrawArrowButton(Graphics g)
+        private void DrawRightArrowButton(Graphics g)
         {
             int yOffset = isPressed ? 2 : 0;
             int xOffset = isPressed ? 2 : 0;
             Rectangle rect = new Rectangle(arrowButtonRect.X + xOffset, arrowButtonRect.Y + yOffset, arrowButtonRect.Width, arrowButtonRect.Height);
 
-            Color bgColor = (isHoveringArrow || isCardExpanded) ? Color.FromArgb(70, 80, 95) : Color.FromArgb(160, 180, 180, 180);
+            Color bgColor = (isHoveringRightArrow || isRightExpanded) ? Color.FromArgb(70, 80, 95) : Color.FromArgb(160, 180, 180, 180);
             using (Brush brush = new SolidBrush(bgColor))
             {
                 g.FillEllipse(brush, rect);
@@ -777,7 +874,7 @@ namespace AZ5Launcher
             GraphicsState state = g.Save();
             g.SmoothingMode = SmoothingMode.HighQuality;
             g.TranslateTransform(cx, cy);
-            g.RotateTransform(currentArrowAngle);
+            g.RotateTransform(currentRightArrowAngle);
 
             using (Pen pen = new Pen(Color.White, 2.0f))
             {
@@ -786,9 +883,9 @@ namespace AZ5Launcher
                 pen.LineJoin = LineJoin.Round;
 
                 PointF[] pts = new PointF[] {
-                    new PointF(-4.5f, -2.0f),
-                    new PointF(0f, 2.5f),
-                    new PointF(4.5f, -2.0f)
+                    new PointF(-2.0f, -4.5f),
+                    new PointF(2.5f, 0f),
+                    new PointF(-2.0f, 4.5f)
                 };
                 g.DrawLines(pen, pts);
             }
@@ -799,6 +896,88 @@ namespace AZ5Launcher
         private int GetCurrentLeftX()
         {
             return (int)Math.Round(leftDrawerHiddenX + (leftDrawerExpandedX - leftDrawerHiddenX) * leftProgress);
+        }
+
+        private int GetCurrentRightX()
+        {
+            return (int)Math.Round(rightDrawerHiddenX + (rightDrawerExpandedX - rightDrawerHiddenX) * rightProgress);
+        }
+
+        private Rectangle GetLeftTitleRect(int leftX)
+        {
+            return new Rectangle(leftX + 6, leftDrawerY + 8, leftDrawerWidth - 12, 26);
+        }
+
+        private Rectangle GetRightTitleRect(int rightX)
+        {
+            return new Rectangle(rightX + 6, leftDrawerY + 8, leftDrawerWidth - 12, 26);
+        }
+
+        private Rectangle GetSlotRect(int index, int drawerX)
+        {
+            int localIndex = index >= 4 ? index - 4 : index;
+            int sy = leftDrawerY + 40 + localIndex * 59;
+            return new Rectangle(drawerX + 6, sy, leftDrawerWidth - 12, 54);
+        }
+
+        private void DrawTitleCard(Graphics g, int drawerIndex, int drawerX)
+        {
+            Rectangle rect = (drawerIndex == 0) ? GetLeftTitleRect(drawerX) : GetRightTitleRect(drawerX);
+            bool isHovered = (drawerIndex == 0) ? isHoveringLeftTitle : isHoveringRightTitle;
+            bool isEditing = (editingTitleDrawer == drawerIndex);
+            string title = (drawerIndex == 0) ? leftDrawerTitle : rightDrawerTitle;
+
+            Rectangle cardBounds = new Rectangle(rect.X, rect.Y, rect.Width - 1, rect.Height - 1);
+            using (GraphicsPath path = CreateRoundedRectanglePath(cardBounds, 5))
+            {
+                Color bg;
+                if (isEditing)
+                {
+                    bg = Color.White;
+                }
+                else if (isHovered)
+                {
+                    bg = Color.FromArgb(235, 242, 250);
+                }
+                else
+                {
+                    bg = Color.FromArgb(242, 245, 249);
+                }
+
+                Color borderColor;
+                if (isEditing)
+                {
+                    borderColor = Color.FromArgb(235, 175, 15);
+                }
+                else if (isHovered)
+                {
+                    borderColor = Color.FromArgb(140, 170, 210);
+                }
+                else
+                {
+                    borderColor = Color.FromArgb(215, 222, 230);
+                }
+
+                using (Brush b = new SolidBrush(bg))
+                using (Pen p = new Pen(borderColor, isEditing ? 1.5f : 1.0f))
+                {
+                    g.FillPath(b, path);
+                    g.DrawPath(p, path);
+                }
+            }
+
+            if (!isEditing)
+            {
+                bool hasTitle = !string.IsNullOrEmpty(title);
+                string displayTitle = hasTitle ? title : "TITLE";
+                Color textColor = hasTitle ? Color.FromArgb(30, 40, 55) : Color.FromArgb(160, 170, 185);
+
+                using (Font font = new Font("Segoe UI", 9.0f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(g, displayTitle, font, rect, textColor,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
+            }
         }
 
         private void DrawLeftDrawer(Graphics g)
@@ -831,50 +1010,53 @@ namespace AZ5Launcher
             }
             g.SmoothingMode = prevMode;
 
-            // Draw 4 target slots
+            // Draw editable Title Card at top
+            DrawTitleCard(g, 0, currentX);
+
+            // Draw 4 target slots (0..3) shifted down slightly
             for (int i = 0; i < 4; i++)
             {
                 DrawSlotCard(g, i, currentX);
             }
-
-            // Draw Auto-Close? checkbox at bottom of left drawer
-            DrawLeftAutoClose(g, currentX);
         }
 
-        private Rectangle GetSlotRect(int index, int leftX)
+        private void DrawRightDrawer(Graphics g)
         {
-            int sy = leftDrawerY + 10 + index * 59;
-            return new Rectangle(leftX + 6, sy, leftDrawerWidth - 12, 54);
-        }
+            int currentX = GetCurrentRightX();
+            Rectangle drawerRect = new Rectangle(currentX, leftDrawerY, leftDrawerWidth, leftDrawerHeight);
 
-        private Rectangle GetLeftAutoCloseRect(int leftX)
-        {
-            return new Rectangle(leftX + 6, leftDrawerY + 248, leftDrawerWidth - 12, 30);
-        }
-
-        private void DrawLeftAutoClose(Graphics g, int leftX)
-        {
-            Rectangle acRect = GetLeftAutoCloseRect(leftX);
-            Color acBg = isHoveringLeftAutoClose ? Color.FromArgb(238, 243, 250) : Color.White;
-            Rectangle cardBounds = new Rectangle(acRect.X, acRect.Y, acRect.Width - 1, acRect.Height - 1);
-            using (GraphicsPath path = CreateRoundedRectanglePath(cardBounds, 6))
-            using (Brush b = new SolidBrush(acBg))
-            using (Pen p = new Pen(isHoveringLeftAutoClose ? Color.FromArgb(140, 170, 210) : Color.FromArgb(220, 225, 230), 1))
+            // Right drawer chassis with rounded right edge (SmoothingMode.None prevents antialiasing against Magenta)
+            SmoothingMode prevMode = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.None;
+            using (GraphicsPath path = new GraphicsPath())
             {
-                g.FillPath(b, path);
-                g.DrawPath(p, path);
+                int r = 12;
+                int d = r * 2;
+                path.AddLine(drawerRect.X, drawerRect.Y, drawerRect.Right - r, drawerRect.Y);
+                path.AddArc(drawerRect.Right - d, drawerRect.Y, d, d, 270, 90);
+                path.AddLine(drawerRect.Right, drawerRect.Y + r, drawerRect.Right, drawerRect.Bottom - r);
+                path.AddArc(drawerRect.Right - d, drawerRect.Bottom - d, d, d, 0, 90);
+                path.AddLine(drawerRect.Right - r, drawerRect.Bottom, drawerRect.X, drawerRect.Bottom);
+                path.CloseFigure();
+
+                using (Brush b = new SolidBrush(Color.FromArgb(248, 249, 251)))
+                {
+                    g.FillPath(b, path);
+                }
+                using (Pen p = new Pen(Color.FromArgb(170, 180, 190), 1))
+                {
+                    g.DrawPath(p, path);
+                }
             }
+            g.SmoothingMode = prevMode;
 
-            int boxSize = 14;
-            Rectangle boxRect = new Rectangle(acRect.X + 8, acRect.Y + (acRect.Height - boxSize) / 2, boxSize, boxSize);
-            Rectangle textRect = new Rectangle(acRect.X + 28, acRect.Y, acRect.Width - 30, acRect.Height);
+            // Draw editable Title Card at top
+            DrawTitleCard(g, 1, currentX);
 
-            DrawCheckBox(g, boxRect, autoClose, isHoveringLeftAutoClose);
-
-            using (Font font = new Font("Segoe UI", 8.5f, FontStyle.Regular))
+            // Draw 4 target slots (4..7) shifted down slightly
+            for (int i = 4; i < 8; i++)
             {
-                TextRenderer.DrawText(g, "Auto-Close?", font, textRect, Color.FromArgb(255, 50, 60, 75),
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                DrawSlotCard(g, i, currentX);
             }
         }
 
@@ -916,57 +1098,43 @@ namespace AZ5Launcher
             return path;
         }
 
-        private void DrawCheckBox(Graphics g, Rectangle boxRect, bool isChecked, bool isHovered)
+        private void DrawSlotCard(Graphics g, int index, int drawerX)
         {
-            Color bgColor = isHovered ? Color.FromArgb(240, 245, 255) : Color.White;
-            using (Brush b = new SolidBrush(bgColor))
-            using (Pen p = new Pen(isHovered ? Color.FromArgb(40, 110, 220) : Color.FromArgb(160, 170, 180), 1.5f))
-            {
-                using (GraphicsPath path = CreateRoundedRectanglePath(boxRect, 3))
-                {
-                    g.FillPath(b, path);
-                    g.DrawPath(p, path);
-                }
-            }
-
-            if (isChecked)
-            {
-                using (Pen checkPen = new Pen(Color.FromArgb(20, 140, 40), 2.2f))
-                {
-                    checkPen.StartCap = LineCap.Round;
-                    checkPen.EndCap = LineCap.Round;
-                    checkPen.LineJoin = LineJoin.Round;
-
-                    PointF p1 = new PointF(boxRect.X + 3.0f, boxRect.Y + 7.0f);
-                    PointF p2 = new PointF(boxRect.X + 6.0f, boxRect.Y + 10.5f);
-                    PointF p3 = new PointF(boxRect.X + 11.5f, boxRect.Y + 3.5f);
-                    g.DrawLines(checkPen, new PointF[] { p1, p2, p3 });
-                }
-            }
-        }
-
-        private void ToggleAutoClose()
-        {
-            autoClose = !autoClose;
-            SaveSettings();
-            Invalidate();
-        }
-
-        private void DrawSlotCard(Graphics g, int index, int leftX)
-        {
-            Rectangle sRect = GetSlotRect(index, leftX);
+            Rectangle sRect = GetSlotRect(index, drawerX);
             bool isActive = (index == activeSlotIndex);
             bool isHovered = (index == hoveringSlotIndex);
             bool isDropTarget = isDragOverActive && (index == dragTargetSlotIndex);
+            bool isBeingDragged = isSlotDragging && (index == slotDragSourceIndex);
+            bool isRearrangeTarget = isSlotDragging && (index == slotDragTargetIndex) && (index != slotDragSourceIndex);
             TargetSlot slot = targetSlots[index];
 
             Rectangle cardBounds = new Rectangle(sRect.X, sRect.Y, sRect.Width - 1, sRect.Height - 1);
             using (GraphicsPath path = CreateRoundedRectanglePath(cardBounds, 6))
             {
-                if (isDropTarget)
+                if (isRearrangeTarget)
                 {
                     using (Brush b = new SolidBrush(Color.FromArgb(255, 253, 230)))
                     using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 2.0f))
+                    {
+                        p.DashStyle = DashStyle.Dash;
+                        g.FillPath(b, path);
+                        g.DrawPath(p, path);
+                    }
+                }
+                else if (isDropTarget)
+                {
+                    using (Brush b = new SolidBrush(Color.FromArgb(255, 253, 230)))
+                    using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 2.0f))
+                    {
+                        p.DashStyle = DashStyle.Dash;
+                        g.FillPath(b, path);
+                        g.DrawPath(p, path);
+                    }
+                }
+                else if (isBeingDragged)
+                {
+                    using (Brush b = new SolidBrush(Color.FromArgb(242, 244, 248)))
+                    using (Pen p = new Pen(Color.FromArgb(170, 185, 205), 1.5f))
                     {
                         p.DashStyle = DashStyle.Dash;
                         g.FillPath(b, path);
@@ -994,7 +1162,24 @@ namespace AZ5Launcher
                 }
             }
 
-            if (isDropTarget)
+            if (isRearrangeTarget)
+            {
+                Rectangle dropTopRect = new Rectangle(sRect.X + 4, sRect.Y + 6, sRect.Width - 8, 16);
+                using (Font fontDrop = new Font("Segoe UI", 8.0f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(g, "⬇ MOVE HERE", fontDrop, dropTopRect, Color.FromArgb(195, 120, 0),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+
+                string moveName = (slotDragSourceIndex >= 0 && slotDragSourceIndex < 8) ? targetSlots[slotDragSourceIndex].GetDisplayName() : "";
+                Rectangle dropBottomRect = new Rectangle(sRect.X + 6, sRect.Y + 22, sRect.Width - 12, 26);
+                using (Font fontName = new Font("Segoe UI", 9.0f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(g, moveName, fontName, dropBottomRect, Color.FromArgb(20, 24, 32),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
+            }
+            else if (isDropTarget)
             {
                 // Drop target preview inside card: "DROP HERE" on top, item preview below
                 Rectangle dropTopRect = new Rectangle(sRect.X + 4, sRect.Y + 6, sRect.Width - 8, 16);
@@ -1008,6 +1193,16 @@ namespace AZ5Launcher
                 using (Font fontName = new Font("Segoe UI", 9.0f, FontStyle.Bold))
                 {
                     TextRenderer.DrawText(g, dragDropPreviewName, fontName, dropBottomRect, Color.FromArgb(20, 24, 32),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
+            }
+            else if (isBeingDragged)
+            {
+                string dispName = slot.GetDisplayName();
+                Rectangle textRect = new Rectangle(sRect.X + 8, sRect.Y, sRect.Width - 16, sRect.Height);
+                using (Font fontN = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(g, dispName, fontN, textRect, Color.FromArgb(160, 175, 190),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                 }
             }
@@ -1035,12 +1230,81 @@ namespace AZ5Launcher
             }
         }
 
+        private void BeginEditingTitle(int drawerIndex)
+        {
+            if (drawerIndex != 0 && drawerIndex != 1) return;
+            editingTitleDrawer = drawerIndex;
+
+            int currentX = (drawerIndex == 0) ? GetCurrentLeftX() : GetCurrentRightX();
+            Rectangle rect = (drawerIndex == 0) ? GetLeftTitleRect(currentX) : GetRightTitleRect(currentX);
+
+            titleTextBox.Text = (drawerIndex == 0) ? leftDrawerTitle : rightDrawerTitle;
+
+            int tbY = rect.Y + (rect.Height - titleTextBox.PreferredHeight) / 2;
+            titleTextBox.Bounds = new Rectangle(rect.X + 8, tbY, rect.Width - 16, titleTextBox.PreferredHeight);
+
+            titleTextBox.Visible = true;
+            titleTextBox.BringToFront();
+            titleTextBox.Focus();
+            titleTextBox.SelectAll();
+            Invalidate();
+        }
+
+        private void CommitTitleEdit()
+        {
+            if (editingTitleDrawer == -1) return;
+            int d = editingTitleDrawer;
+            editingTitleDrawer = -1;
+            string text = SanitizeSingleLine(titleTextBox.Text, 32);
+            if (d == 0)
+            {
+                leftDrawerTitle = text;
+            }
+            else
+            {
+                rightDrawerTitle = text;
+            }
+            titleTextBox.Visible = false;
+            this.Focus();
+            SaveSettings();
+            Invalidate();
+        }
+
+        private void CancelTitleEdit()
+        {
+            if (editingTitleDrawer == -1) return;
+            editingTitleDrawer = -1;
+            titleTextBox.Visible = false;
+            this.Focus();
+            Invalidate();
+        }
+
         private void ToggleLeftDrawer()
         {
+            if (editingTitleDrawer == 0)
+            {
+                CommitTitleEdit();
+            }
             isLeftExpanded = !isLeftExpanded;
             animLeftStart = leftProgress;
             animLeftTarget = isLeftExpanded ? 1.0f : 0.0f;
             leftStopwatch.Restart();
+            if (!animTimer.Enabled)
+            {
+                animTimer.Start();
+            }
+        }
+
+        private void ToggleRightDrawer()
+        {
+            if (editingTitleDrawer == 1)
+            {
+                CommitTitleEdit();
+            }
+            isRightExpanded = !isRightExpanded;
+            animRightStart = rightProgress;
+            animRightTarget = isRightExpanded ? 1.0f : 0.0f;
+            rightStopwatch.Restart();
             if (!animTimer.Enabled)
             {
                 animTimer.Start();
@@ -1059,39 +1323,9 @@ namespace AZ5Launcher
             }
         }
 
-        private void ToggleTargetCard()
-        {
-            isCardExpanded = !isCardExpanded;
-            animCardStart = cardProgress;
-            animCardTarget = isCardExpanded ? 1.0f : 0.0f;
-            cardStopwatch.Restart();
-            if (!animTimer.Enabled)
-            {
-                animTimer.Start();
-            }
-        }
-
         private void AnimTimer_Tick(object sender, EventArgs e)
         {
             bool isAnimating = false;
-
-            if (cardStopwatch.IsRunning)
-            {
-                float elapsed = (float)cardStopwatch.ElapsedMilliseconds;
-                float t = elapsed / ANIM_DURATION_MS;
-                if (t >= 1.0f)
-                {
-                    cardProgress = animCardTarget;
-                    cardStopwatch.Stop();
-                }
-                else
-                {
-                    float ease = t < 0.5f ? 4f * t * t * t : 1f - (float)Math.Pow(-2f * t + 2f, 3) / 2f;
-                    cardProgress = animCardStart + (animCardTarget - animCardStart) * ease;
-                    isAnimating = true;
-                }
-                currentArrowAngle = cardProgress * 180.0f;
-            }
 
             if (helpStopwatch.IsRunning)
             {
@@ -1129,7 +1363,25 @@ namespace AZ5Launcher
                 currentLeftArrowAngle = leftProgress * 180.0f;
             }
 
-            if (!isAnimating && !cardStopwatch.IsRunning && !helpStopwatch.IsRunning && !leftStopwatch.IsRunning)
+            if (rightStopwatch.IsRunning)
+            {
+                float elapsed = (float)rightStopwatch.ElapsedMilliseconds;
+                float t = elapsed / ANIM_DURATION_MS;
+                if (t >= 1.0f)
+                {
+                    rightProgress = animRightTarget;
+                    rightStopwatch.Stop();
+                }
+                else
+                {
+                    float ease = t < 0.5f ? 4f * t * t * t : 1f - (float)Math.Pow(-2f * t + 2f, 3) / 2f;
+                    rightProgress = animRightStart + (animRightTarget - animRightStart) * ease;
+                    isAnimating = true;
+                }
+                currentRightArrowAngle = rightProgress * 180.0f;
+            }
+
+            if (!isAnimating && !helpStopwatch.IsRunning && !leftStopwatch.IsRunning && !rightStopwatch.IsRunning)
             {
                 animTimer.Stop();
             }
@@ -1188,23 +1440,12 @@ namespace AZ5Launcher
             }
         }
 
-        private int GetCurrentCardY()
-        {
-            return (int)Math.Round(textCardHiddenY + (textCardExpandedY - textCardHiddenY) * cardProgress);
-        }
-
-        private Rectangle GetCurrentTargetCardRect()
-        {
-            return new Rectangle(textCardRect.X, GetCurrentCardY(), textCardRect.Width, textCardRect.Height);
-        }
-
         private void DrawTextCard(Graphics g)
         {
             int yOffset = isPressed ? 2 : 0;
             int xOffset = isPressed ? 2 : 0;
 
-            int currentY = GetCurrentCardY();
-            Rectangle rect = new Rectangle(textCardRect.X + xOffset, currentY + yOffset, textCardRect.Width, textCardRect.Height);
+            Rectangle rect = new Rectangle(textCardRect.X + xOffset, textCardRect.Y + yOffset, textCardRect.Width, textCardRect.Height);
 
             // Card background and border (SmoothingMode.None prevents antialiasing against Magenta)
             SmoothingMode prevMode = g.SmoothingMode;
@@ -1241,31 +1482,149 @@ namespace AZ5Launcher
             }
         }
 
-        private static bool PointInCircle(PointF pt, float cx, float cy, float radius)
-        {
-            float dx = pt.X - cx;
-            float dy = pt.Y - cy;
-            return (dx * dx + dy * dy) <= (radius * radius);
-        }
-
         private void ClearHoverStates()
         {
-            if (isHoveringClose || isHoveringHelp || isHoveringRadiation || isHoveringArrow || isHoveringNameplate || isHoveringLeftAutoClose || hoveringSlotIndex != -1)
+            if (isHoveringClose || isHoveringHelp || isHoveringLeftArrow || isHoveringRightArrow || 
+                isHoveringNameplate || hoveringSlotIndex != -1 || isHoveringLeftTitle || isHoveringRightTitle)
             {
                 isHoveringClose = false;
                 isHoveringHelp = false;
-                isHoveringRadiation = false;
-                isHoveringArrow = false;
+                isHoveringLeftArrow = false;
+                isHoveringRightArrow = false;
                 isHoveringNameplate = false;
-                isHoveringLeftAutoClose = false;
                 hoveringSlotIndex = -1;
+                isHoveringLeftTitle = false;
+                isHoveringRightTitle = false;
                 Invalidate();
             }
         }
 
+        private int DetermineDropSlotForRearrange(Point pt)
+        {
+            if (leftProgress > 0.1f && pt.X < CASING_X)
+            {
+                int currentLeftX = GetCurrentLeftX();
+                for (int i = 0; i < 4; i++)
+                {
+                    Rectangle sRect = GetSlotRect(i, currentLeftX);
+                    if (pt.X >= currentLeftX && pt.X <= currentLeftX + leftDrawerWidth &&
+                        pt.Y >= sRect.Top - 4 && pt.Y <= sRect.Bottom + 4)
+                    {
+                        return i;
+                    }
+                }
+            }
+
+            if (rightProgress > 0.1f && pt.X > CASING_X + CASING_WIDTH)
+            {
+                int currentRightX = GetCurrentRightX();
+                for (int i = 4; i < 8; i++)
+                {
+                    Rectangle sRect = GetSlotRect(i, currentRightX);
+                    if (pt.X >= currentRightX && pt.X <= currentRightX + leftDrawerWidth &&
+                        pt.Y >= sRect.Top - 4 && pt.Y <= sRect.Bottom + 4)
+                    {
+                        return i;
+                    }
+                }
+            }
+
+            return -1;
+        }
+
+        private void MoveOrSwapSlot(int source, int target)
+        {
+            if (source < 0 || source >= 8 || target < 0 || target >= 8) return;
+            if (source == target) return;
+
+            TargetSlot srcSlot = targetSlots[source];
+            TargetSlot dstSlot = targetSlots[target];
+
+            string srcPath = srcSlot.Path;
+            string srcLabel = srcSlot.Label;
+            string dstPath = dstSlot.Path;
+            string dstLabel = dstSlot.Label;
+
+            // Target gets source item
+            dstSlot.Path = srcPath;
+            dstSlot.Label = srcLabel;
+
+            // Source gets target item (cleared if target was empty, swapped if occupied)
+            srcSlot.Path = dstPath;
+            srcSlot.Label = dstLabel;
+
+            // Follow active slot selection if affected
+            if (activeSlotIndex == source)
+            {
+                activeSlotIndex = target;
+            }
+            else if (activeSlotIndex == target)
+            {
+                activeSlotIndex = source;
+            }
+
+            SaveSettings();
+            PlayClickSound();
+            Invalidate();
+        }
+
+        private void DrawFloatingSlotBadge(Graphics g)
+        {
+            if (!isSlotDragging || slotDragSourceIndex < 0 || slotDragSourceIndex >= 8) return;
+
+            GraphicsState state = g.Save();
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            TargetSlot slot = targetSlots[slotDragSourceIndex];
+            string name = slot.GetDisplayName();
+            if (string.IsNullOrEmpty(name)) name = "TARGET";
+
+            int badgeW = 124;
+            int badgeH = 34;
+            int bx = slotDragCurrentPt.X - badgeW / 2;
+            int by = slotDragCurrentPt.Y - badgeH / 2;
+
+            Rectangle badgeRect = new Rectangle(bx, by, badgeW, badgeH);
+
+            // Subtle drop shadow
+            Rectangle shadowRect = new Rectangle(bx + 2, by + 3, badgeW, badgeH);
+            using (GraphicsPath shadowPath = CreateRoundedRectanglePath(shadowRect, 6))
+            using (Brush shadowBrush = new SolidBrush(Color.FromArgb(90, 0, 0, 0)))
+            {
+                g.FillPath(shadowBrush, shadowPath);
+            }
+
+            // Card body
+            using (GraphicsPath path = CreateRoundedRectanglePath(badgeRect, 6))
+            using (Brush b = new SolidBrush(Color.FromArgb(235, 26, 32, 44)))
+            using (Pen p = new Pen(Color.FromArgb(235, 175, 15), 1.5f))
+            {
+                g.FillPath(b, path);
+                g.DrawPath(p, path);
+            }
+
+            // Move indicator icon
+            Rectangle iconRect = new Rectangle(badgeRect.X + 6, badgeRect.Y + 8, 14, 16);
+            using (Font iconFont = new Font("Segoe UI", 8.5f, FontStyle.Bold))
+            {
+                TextRenderer.DrawText(g, "≡", iconFont, iconRect, Color.FromArgb(255, 215, 60),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+
+            // Display name
+            Rectangle textRect = new Rectangle(badgeRect.X + 22, badgeRect.Y, badgeRect.Width - 26, badgeRect.Height);
+            using (Font font = new Font("Segoe UI", 9.0f, FontStyle.Bold))
+            {
+                TextRenderer.DrawText(g, name, font, textRect, Color.White,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            }
+
+            g.Restore(state);
+        }
+
         private void SelectTargetSlot(int index)
         {
-            if (index < 0 || index >= 4) return;
+            if (index < 0 || index >= 8) return;
             activeSlotIndex = index;
             if (string.IsNullOrEmpty(targetSlots[index].Path))
             {
@@ -1291,9 +1650,25 @@ namespace AZ5Launcher
             int casingLeft = CASING_X + xOffset;
             int casingRight = CASING_X + CASING_WIDTH + xOffset;
 
-            // Handle right click on slots in open left drawer
+            // Handle right click on slots in open left or right drawer
             if (e.Button == MouseButtons.Right)
             {
+                if (isPotentialSlotDrag || isSlotDragging)
+                {
+                    isPotentialSlotDrag = false;
+                    isSlotDragging = false;
+                    pendingSlotIndex = -1;
+                    slotDragSourceIndex = -1;
+                    slotDragTargetIndex = -1;
+                    this.Capture = false;
+                    Invalidate();
+                }
+
+                if (editingTitleDrawer != -1)
+                {
+                    CommitTitleEdit();
+                }
+
                 if (leftProgress > 0.1f && virtualPt.X < CASING_X)
                 {
                     int currentLeftX = GetCurrentLeftX();
@@ -1313,19 +1688,43 @@ namespace AZ5Launcher
                         }
                     }
                 }
+                else if (rightProgress > 0.1f && virtualPt.X > CASING_X + CASING_WIDTH)
+                {
+                    int currentRightX = GetCurrentRightX();
+                    for (int i = 4; i < 8; i++)
+                    {
+                        Rectangle sRect = GetSlotRect(i, currentRightX);
+                        if (sRect.Contains(virtualPt))
+                        {
+                            if (activeSlotIndex != i)
+                            {
+                                activeSlotIndex = i;
+                                SaveSettings();
+                                Invalidate();
+                                Update();
+                            }
+                            break;
+                        }
+                    }
+                }
                 return;
             }
 
             if (e.Button == MouseButtons.Left)
             {
-                // 1. Check slots & Auto-Close in open left drawer
+                if (editingTitleDrawer != -1)
+                {
+                    CommitTitleEdit();
+                }
+
+                // 1. Check open left drawer (title & slots)
                 if (leftProgress > 0.1f && virtualPt.X < CASING_X)
                 {
                     int currentLeftX = GetCurrentLeftX();
-                    Rectangle leftAcRect = GetLeftAutoCloseRect(currentLeftX);
-                    if (leftAcRect.Contains(virtualPt))
+                    Rectangle titleRect = GetLeftTitleRect(currentLeftX);
+                    if (titleRect.Contains(virtualPt))
                     {
-                        ToggleAutoClose();
+                        BeginEditingTitle(0);
                         return;
                     }
 
@@ -1334,7 +1733,37 @@ namespace AZ5Launcher
                         Rectangle sRect = GetSlotRect(i, currentLeftX);
                         if (sRect.Contains(virtualPt))
                         {
-                            SelectTargetSlot(i);
+                            pendingSlotIndex = i;
+                            isPotentialSlotDrag = true;
+                            isSlotDragging = false;
+                            slotDragStartCursor = Cursor.Position;
+                            slotDragCurrentPt = virtualPt;
+                            return;
+                        }
+                    }
+                }
+
+                // 2. Check open right drawer (title & slots)
+                if (rightProgress > 0.1f && virtualPt.X > CASING_X + CASING_WIDTH)
+                {
+                    int currentRightX = GetCurrentRightX();
+                    Rectangle titleRect = GetRightTitleRect(currentRightX);
+                    if (titleRect.Contains(virtualPt))
+                    {
+                        BeginEditingTitle(1);
+                        return;
+                    }
+
+                    for (int i = 4; i < 8; i++)
+                    {
+                        Rectangle sRect = GetSlotRect(i, currentRightX);
+                        if (sRect.Contains(virtualPt))
+                        {
+                            pendingSlotIndex = i;
+                            isPotentialSlotDrag = true;
+                            isSlotDragging = false;
+                            slotDragStartCursor = Cursor.Position;
+                            slotDragCurrentPt = virtualPt;
                             return;
                         }
                     }
@@ -1354,21 +1783,21 @@ namespace AZ5Launcher
                     return;
                 }
 
-                // 5. Check radiation button (bottom left) -> toggles left target presets drawer
+                // 5. Check bottom-left arrow button -> toggles left target presets drawer
                 if (radiationButtonRect.Contains(virtualPt))
                 {
                     ToggleLeftDrawer();
                     return;
                 }
 
-                // 6. Check arrow button (bottom right) -> toggles bottom path drawer
+                // 6. Check bottom-right arrow button -> toggles right target presets drawer
                 if (arrowButtonRect.Contains(virtualPt))
                 {
-                    ToggleTargetCard();
+                    ToggleRightDrawer();
                     return;
                 }
 
-                // 7. Check nameplate (bottom of casing) -> if empty assigns target, else toggles presets
+                // 7. Check nameplate (bottom of casing) -> if empty assigns target, else toggles corresponding presets drawer
                 Rectangle curNameplateRect = new Rectangle(nameplateRect.X + xOffset, nameplateRect.Y + yOffset, nameplateRect.Width, nameplateRect.Height);
                 if (curNameplateRect.Contains(virtualPt))
                 {
@@ -1378,7 +1807,14 @@ namespace AZ5Launcher
                     }
                     else
                     {
-                        ToggleLeftDrawer();
+                        if (activeSlotIndex < 4)
+                        {
+                            ToggleLeftDrawer();
+                        }
+                        else
+                        {
+                            ToggleRightDrawer();
+                        }
                     }
                     return;
                 }
@@ -1391,9 +1827,9 @@ namespace AZ5Launcher
                     return;
                 }
 
-                // 9. Check visible bottom target path card (click to reassign)
-                Rectangle currentTargetRect = GetCurrentTargetCardRect();
-                if (cardProgress > 0.05f && virtualPt.Y >= casingBottom && virtualPt.Y <= currentTargetRect.Bottom && currentTargetRect.Contains(virtualPt))
+                // 9. Check visible bottom target path card (always visible! Click to assign/reassign)
+                Rectangle curTargetRect = new Rectangle(textCardRect.X + xOffset, textCardRect.Y + yOffset, textCardRect.Width, textCardRect.Height);
+                if (curTargetRect.Contains(virtualPt))
                 {
                     AssignTargetFile(activeSlotIndex);
                     return;
@@ -1442,6 +1878,43 @@ namespace AZ5Launcher
         {
             base.OnMouseUp(e);
 
+            if (isPotentialSlotDrag)
+            {
+                this.Capture = false;
+                isPotentialSlotDrag = false;
+
+                if (isSlotDragging)
+                {
+                    isSlotDragging = false;
+                    int source = slotDragSourceIndex;
+                    int target = DetermineDropSlotForRearrange(e.Location);
+                    slotDragSourceIndex = -1;
+                    slotDragTargetIndex = -1;
+                    pendingSlotIndex = -1;
+
+                    if (target != -1 && target != source)
+                    {
+                        MoveOrSwapSlot(source, target);
+                    }
+                    else
+                    {
+                        Invalidate();
+                    }
+                    return;
+                }
+                else
+                {
+                    // Click without dragging
+                    int clickedSlot = pendingSlotIndex;
+                    pendingSlotIndex = -1;
+                    if (clickedSlot >= 0 && clickedSlot < 8)
+                    {
+                        SelectTargetSlot(clickedSlot);
+                    }
+                    return;
+                }
+            }
+
             if (isDragging)
             {
                 isDragging = false;
@@ -1465,6 +1938,57 @@ namespace AZ5Launcher
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+
+            // Handle slot rearrange drag logic
+            if (isPotentialSlotDrag)
+            {
+                Point curPos = Cursor.Position;
+                int dx = curPos.X - slotDragStartCursor.X;
+                int dy = curPos.Y - slotDragStartCursor.Y;
+
+                if (!isSlotDragging)
+                {
+                    if (Math.Abs(dx) > dragThreshold || Math.Abs(dy) > dragThreshold)
+                    {
+                        if (pendingSlotIndex >= 0 && pendingSlotIndex < 8 &&
+                            (!string.IsNullOrEmpty(targetSlots[pendingSlotIndex].Path) || !string.IsNullOrEmpty(targetSlots[pendingSlotIndex].Label)))
+                        {
+                            isSlotDragging = true;
+                            slotDragSourceIndex = pendingSlotIndex;
+                            this.Capture = true;
+                        }
+                        else
+                        {
+                            isPotentialSlotDrag = false;
+                        }
+                    }
+                }
+
+                if (isSlotDragging)
+                {
+                    slotDragCurrentPt = e.Location;
+
+                    // Auto-expand opposite drawer if dragging near its side
+                    if (!isRightExpanded && (arrowButtonRect.Contains(e.Location) || e.Location.X > CASING_X + CASING_WIDTH - 20))
+                    {
+                        ToggleRightDrawer();
+                    }
+                    if (!isLeftExpanded && (radiationButtonRect.Contains(e.Location) || e.Location.X < CASING_X + 20))
+                    {
+                        ToggleLeftDrawer();
+                    }
+
+                    int targetSlot = DetermineDropSlotForRearrange(e.Location);
+                    if (targetSlot != slotDragTargetIndex)
+                    {
+                        slotDragTargetIndex = targetSlot;
+                    }
+
+                    this.Cursor = Cursors.Hand;
+                    Invalidate();
+                    return;
+                }
+            }
 
             // Handle window dragging logic
             if (isDragging)
@@ -1503,23 +2027,39 @@ namespace AZ5Launcher
             // Hover checks for 4 corner buttons
             bool hoveringClose = closeButtonRect.Contains(virtualPt);
             bool hoveringHelp = helpButtonRect.Contains(virtualPt);
-            bool hoveringRadiation = radiationButtonRect.Contains(virtualPt);
-            bool hoveringArrow = arrowButtonRect.Contains(virtualPt);
+            bool hoveringLeft = radiationButtonRect.Contains(virtualPt);
+            bool hoveringRight = arrowButtonRect.Contains(virtualPt);
 
             // Hover check for nameplate
             Rectangle curNameplateRect = new Rectangle(nameplateRect.X + xOffset, nameplateRect.Y + yOffset, nameplateRect.Width, nameplateRect.Height);
             bool hoveringNameplate = curNameplateRect.Contains(virtualPt);
 
-            // Hover check for left drawer Auto-Close & slots
+            // Hover checks for drawers
             int newHoverSlot = -1;
-            bool hoveringLeftAc = false;
+            bool hoveringLeftTitle = false;
+            bool hoveringRightTitle = false;
+
             if (leftProgress > 0.1f && virtualPt.X < CASING_X)
             {
                 int currentLeftX = GetCurrentLeftX();
-                hoveringLeftAc = GetLeftAutoCloseRect(currentLeftX).Contains(virtualPt);
+                hoveringLeftTitle = GetLeftTitleRect(currentLeftX).Contains(virtualPt);
                 for (int i = 0; i < 4; i++)
                 {
                     Rectangle sRect = GetSlotRect(i, currentLeftX);
+                    if (sRect.Contains(virtualPt))
+                    {
+                        newHoverSlot = i;
+                        break;
+                    }
+                }
+            }
+            else if (rightProgress > 0.1f && virtualPt.X > CASING_X + CASING_WIDTH)
+            {
+                int currentRightX = GetCurrentRightX();
+                hoveringRightTitle = GetRightTitleRect(currentRightX).Contains(virtualPt);
+                for (int i = 4; i < 8; i++)
+                {
+                    Rectangle sRect = GetSlotRect(i, currentRightX);
                     if (sRect.Contains(virtualPt))
                     {
                         newHoverSlot = i;
@@ -1532,24 +2072,26 @@ namespace AZ5Launcher
             Rectangle currentHelpRect = GetCurrentHelpCardRect();
             bool inVisibleHelp = (helpProgress > 0.05f) && (virtualPt.Y < casingTop) && (virtualPt.Y >= currentHelpRect.Top) && currentHelpRect.Contains(virtualPt);
 
-            Rectangle currentTargetRect = GetCurrentTargetCardRect();
-            bool inVisibleTarget = (cardProgress > 0.05f) && (virtualPt.Y >= casingBottom) && (virtualPt.Y <= currentTargetRect.Bottom) && currentTargetRect.Contains(virtualPt);
+            Rectangle curTargetRect = new Rectangle(textCardRect.X + xOffset, textCardRect.Y + yOffset, textCardRect.Width, textCardRect.Height);
+            bool inVisibleTarget = curTargetRect.Contains(virtualPt);
 
             if (hoveringClose != isHoveringClose || 
                 hoveringHelp != isHoveringHelp || 
-                hoveringRadiation != isHoveringRadiation || 
-                hoveringArrow != isHoveringArrow ||
+                hoveringLeft != isHoveringLeftArrow || 
+                hoveringRight != isHoveringRightArrow ||
                 hoveringNameplate != isHoveringNameplate ||
                 newHoverSlot != hoveringSlotIndex ||
-                hoveringLeftAc != isHoveringLeftAutoClose)
+                hoveringLeftTitle != isHoveringLeftTitle ||
+                hoveringRightTitle != isHoveringRightTitle)
             {
                 isHoveringClose = hoveringClose;
                 isHoveringHelp = hoveringHelp;
-                isHoveringRadiation = hoveringRadiation;
-                isHoveringArrow = hoveringArrow;
+                isHoveringLeftArrow = hoveringLeft;
+                isHoveringRightArrow = hoveringRight;
                 isHoveringNameplate = hoveringNameplate;
                 hoveringSlotIndex = newHoverSlot;
-                isHoveringLeftAutoClose = hoveringLeftAc;
+                isHoveringLeftTitle = hoveringLeftTitle;
+                isHoveringRightTitle = hoveringRightTitle;
                 Invalidate();
             }
 
@@ -1557,7 +2099,8 @@ namespace AZ5Launcher
                             IsPointOnButton(virtualPt, xOffset, yOffset);
 
             // Set cursor type: only show Hand cursor for actual interactive elements and the button itself
-            if (hoveringClose || hoveringHelp || hoveringRadiation || hoveringArrow || hoveringNameplate || newHoverSlot != -1 || hoveringLeftAc || inVisibleHelp || inVisibleTarget || onButton)
+            if (hoveringClose || hoveringHelp || hoveringLeft || hoveringRight || hoveringNameplate || 
+                newHoverSlot != -1 || hoveringLeftTitle || hoveringRightTitle || inVisibleHelp || inVisibleTarget || onButton)
             {
                 this.Cursor = Cursors.Hand;
             }
@@ -1745,13 +2288,13 @@ namespace AZ5Launcher
 
         private bool IsSlotEmpty(int index)
         {
-            if (index < 0 || index >= 4) return true;
+            if (index < 0 || index >= 8) return true;
             return string.IsNullOrEmpty(targetSlots[index].Path);
         }
 
         private int GetFirstEmptySlotIndex()
         {
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 8; i++)
             {
                 if (IsSlotEmpty(i))
                 {
@@ -1786,7 +2329,24 @@ namespace AZ5Launcher
                         return i;
                     }
                 }
-                int clamped = Math.Max(0, Math.Min(3, (pt.Y - (leftDrawerY + 10)) / 59));
+                int clamped = Math.Max(0, Math.Min(3, (pt.Y - (leftDrawerY + 40)) / 59));
+                return clamped;
+            }
+
+            // If right drawer is open and cursor is inside right drawer
+            if (rightProgress > 0.1f && pt.X > CASING_X + CASING_WIDTH)
+            {
+                int currentRightX = GetCurrentRightX();
+                for (int i = 4; i < 8; i++)
+                {
+                    Rectangle sRect = GetSlotRect(i, currentRightX);
+                    if (pt.X >= currentRightX && pt.X < currentRightX + leftDrawerWidth &&
+                        pt.Y >= sRect.Top - 3 && pt.Y <= sRect.Bottom + 3)
+                    {
+                        return i;
+                    }
+                }
+                int clamped = Math.Max(4, Math.Min(7, 4 + (pt.Y - (leftDrawerY + 40)) / 59));
                 return clamped;
             }
 
@@ -1802,10 +2362,14 @@ namespace AZ5Launcher
             {
                 ToggleLeftDrawer();
             }
+            if (!isRightExpanded && (arrowButtonRect.Contains(pt) || pt.X > CASING_X + CASING_WIDTH))
+            {
+                ToggleRightDrawer();
+            }
 
             int slot = DetermineDropSlot(pt);
             dragTargetSlotIndex = slot;
-            isDragTargetMainButton = !(leftProgress > 0.1f && pt.X < CASING_X);
+            isDragTargetMainButton = !(leftProgress > 0.1f && pt.X < CASING_X) && !(rightProgress > 0.1f && pt.X > CASING_X + CASING_WIDTH);
 
             if (prevTarget != dragTargetSlotIndex || prevIsMain != isDragTargetMainButton)
             {
@@ -1829,6 +2393,10 @@ namespace AZ5Launcher
         protected override void OnDragEnter(DragEventArgs drgevent)
         {
             base.OnDragEnter(drgevent);
+            if (editingTitleDrawer != -1)
+            {
+                CommitTitleEdit();
+            }
             string path = ExtractDroppedPath(drgevent.Data);
             if (!string.IsNullOrEmpty(path))
             {
@@ -1881,7 +2449,7 @@ namespace AZ5Launcher
             {
                 Point pt = this.PointToClient(new Point(drgevent.X, drgevent.Y));
                 int targetSlot = DetermineDropSlot(pt);
-                if (targetSlot >= 0 && targetSlot < 4)
+                if (targetSlot >= 0 && targetSlot < 8)
                 {
                     targetSlots[targetSlot].Path = SanitizePath(path);
                     targetSlots[targetSlot].Label = ""; // Clear custom label on new assignment
@@ -1919,6 +2487,10 @@ namespace AZ5Launcher
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             base.OnFormClosing(e);
+            if (editingTitleDrawer != -1)
+            {
+                CommitTitleEdit();
+            }
             SaveSettings();
         }
 
@@ -1935,7 +2507,7 @@ namespace AZ5Launcher
 
         private void RenameLabel(int slotIndex)
         {
-            if (slotIndex < 0 || slotIndex >= 4) return;
+            if (slotIndex < 0 || slotIndex >= 8) return;
             TargetSlot slot = targetSlots[slotIndex];
             string defaultVal = !string.IsNullOrEmpty(slot.Label) ? slot.Label : 
                 (Directory.Exists(slot.Path) ? Path.GetFileName(slot.Path) : Path.GetFileNameWithoutExtension(slot.Path));
@@ -1981,7 +2553,7 @@ namespace AZ5Launcher
 
         private void AssignTargetFile(int slotIndex)
         {
-            if (slotIndex < 0 || slotIndex >= 4) return;
+            if (slotIndex < 0 || slotIndex >= 8) return;
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
                 ofd.Title = "Select Target File";
@@ -2000,7 +2572,7 @@ namespace AZ5Launcher
 
         private void AssignTargetFolder(int slotIndex)
         {
-            if (slotIndex < 0 || slotIndex >= 4) return;
+            if (slotIndex < 0 || slotIndex >= 8) return;
             using (FolderBrowserDialog fbd = new FolderBrowserDialog())
             {
                 fbd.Description = "Select Target Folder";
@@ -2017,7 +2589,7 @@ namespace AZ5Launcher
 
         private void ClearTarget(int slotIndex)
         {
-            if (slotIndex < 0 || slotIndex >= 4) return;
+            if (slotIndex < 0 || slotIndex >= 8) return;
             targetSlots[slotIndex].Path = "";
             targetSlots[slotIndex].Label = "";
             SaveSettings();
@@ -2062,10 +2634,7 @@ namespace AZ5Launcher
                 }
 
                 Process.Start(psi);
-                if (autoClose)
-                {
-                    Application.Exit();
-                }
+                // Application never auto-closes on launch
             }
             catch (Exception ex)
             {
@@ -2160,6 +2729,19 @@ namespace AZ5Launcher
         private string GetConfigPath()
         {
             string dir = AppDomain.CurrentDomain.BaseDirectory;
+            try
+            {
+                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (!string.IsNullOrEmpty(exePath))
+                {
+                    string exeDir = Path.GetDirectoryName(exePath);
+                    if (!string.IsNullOrEmpty(exeDir))
+                    {
+                        dir = exeDir;
+                    }
+                }
+            }
+            catch { }
             return Path.Combine(dir, "settings.txt");
         }
 
@@ -2174,7 +2756,7 @@ namespace AZ5Launcher
                     if (lines.Length > 0)
                     {
                         int slotIdx;
-                        if (lines.Length >= 9 && int.TryParse(lines[0], out slotIdx) && slotIdx >= 0 && slotIdx < 4)
+                        if (lines.Length >= 9 && int.TryParse(lines[0], out slotIdx) && slotIdx >= 0 && slotIdx < 8)
                         {
                             activeSlotIndex = slotIdx;
                             for (int i = 0; i < 4; i++)
@@ -2182,14 +2764,6 @@ namespace AZ5Launcher
                                 int lIdx = 1 + i * 2;
                                 if (lIdx < lines.Length) targetSlots[i].Path = SanitizePath(lines[lIdx]);
                                 if (lIdx + 1 < lines.Length) targetSlots[i].Label = SanitizeSingleLine(lines[lIdx + 1]);
-                            }
-                            if (lines.Length > 10)
-                            {
-                                bool parsedAutoClose;
-                                if (bool.TryParse(lines[10], out parsedAutoClose))
-                                {
-                                    autoClose = parsedAutoClose;
-                                }
                             }
                             if (lines.Length > 12)
                             {
@@ -2205,6 +2779,20 @@ namespace AZ5Launcher
                                         this.Location = savedLocation;
                                     }
                                 }
+                            }
+                            if (lines.Length > 13)
+                            {
+                                leftDrawerTitle = SanitizeSingleLine(lines[13], 32);
+                            }
+                            if (lines.Length > 14)
+                            {
+                                rightDrawerTitle = SanitizeSingleLine(lines[14], 32);
+                            }
+                            for (int i = 4; i < 8; i++)
+                            {
+                                int lIdx = 15 + (i - 4) * 2;
+                                if (lIdx < lines.Length) targetSlots[i].Path = SanitizePath(lines[lIdx]);
+                                if (lIdx + 1 < lines.Length) targetSlots[i].Label = SanitizeSingleLine(lines[lIdx + 1]);
                             }
                         }
                         else
@@ -2226,13 +2814,13 @@ namespace AZ5Launcher
             {
                 string path = GetConfigPath();
 
-                for (int i = 0; i < 4; i++)
+                for (int i = 0; i < 8; i++)
                 {
                     targetSlots[i].Path = SanitizePath(targetSlots[i].Path);
                     targetSlots[i].Label = SanitizeSingleLine(targetSlots[i].Label);
                 }
 
-                string[] lines = new string[13];
+                string[] lines = new string[23];
                 lines[0] = activeSlotIndex.ToString();
                 for (int i = 0; i < 4; i++)
                 {
@@ -2240,7 +2828,7 @@ namespace AZ5Launcher
                     lines[1 + i * 2 + 1] = targetSlots[i].Label;
                 }
                 lines[9] = "1.000";
-                lines[10] = autoClose.ToString();
+                lines[10] = "False";
 
                 Point loc = currentWindowLocation;
                 if (loc.IsEmpty)
@@ -2257,6 +2845,14 @@ namespace AZ5Launcher
 
                 lines[11] = loc.X.ToString();
                 lines[12] = loc.Y.ToString();
+                lines[13] = leftDrawerTitle;
+                lines[14] = rightDrawerTitle;
+
+                for (int i = 4; i < 8; i++)
+                {
+                    lines[15 + (i - 4) * 2] = targetSlots[i].Path;
+                    lines[15 + (i - 4) * 2 + 1] = targetSlots[i].Label;
+                }
 
                 File.WriteAllLines(path, lines);
             }
